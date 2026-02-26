@@ -1,2 +1,2 @@
-Ausführung:
+run command:
 streamlit run streamlit_app.py
