@@ -8,6 +8,7 @@ import os
 import re
 import time
 import math
+import textwrap
 from io import BytesIO
 from typing import Dict, List, Tuple, Optional
 
@@ -39,9 +40,10 @@ EXCEL_COLS = ["A", "B", "C", "D", "E"]
 DEFAULT_WIDTHS = {"A": 28, "B": 18, "C": 18, "D": 26, "E": 30}
 
 # Druck/Zeilenhöhe (Heuristik für Wrap-Text)
-HEADER_ROW_HEIGHT = 20
+HEADER_ROW_HEIGHT = 22
 BASE_ROW_HEIGHT = 15
-LINE_HEIGHT = 13
+LINE_HEIGHT = 15
+ROW_PADDING = 2  # Sicherheitsmarge, damit Wrap-Text nicht abgeschnitten wird
 
 # Start-Batchgröße (HubSpot kann bei zu vielen filterGroups 400 werfen -> auto-split)
 INITIAL_FILTERGROUPS_PER_REQUEST = 5
@@ -233,21 +235,41 @@ def read_widths_from_template(uploaded_file) -> Dict[str, float]:
 
 def estimate_wrapped_lines(text: str, col_width_excel: float) -> int:
     """
-    Heuristik: Wie viele Zeilen braucht der Text ungefähr bei Wrap Text?
+    Konservative Heuristik: Wie viele Zeilen braucht der Text ungefähr bei Wrap Text?
+
+    Hinweis: OpenPyXL kann Excel-"AutoFit Row Height" (Font-Metriken) nicht exakt nachbilden.
+    Deshalb rechnen wir bewusst etwas konservativ, damit beim Öffnen/Drucken nichts abgeschnitten wird.
     """
-    if not text:
+    if text is None:
         return 1
 
-    approx_chars_per_line = max(8, int(col_width_excel * 1.15))
-    parts = str(text).splitlines() or [str(text)]
-    total = 0
-    for p in parts:
-        p = p.strip()
-        if not p:
-            total += 1
+    s = str(text).replace("\r\n", "\n").replace("\r", "\n")
+    if s.strip() == "":
+        return 1
+
+    # Excel-Spaltenbreite ist grob "Zeichen" in Standard-Font (Calibri 11).
+    # Mit 0.95 werden wir etwas konservativer (-> mehr Zeilen).
+    try:
+        chars_per_line = max(6, int(float(col_width_excel) * 0.95))
+    except Exception:
+        chars_per_line = 12
+
+    total_lines = 0
+    for raw in s.split("\n"):
+        line = raw.strip()
+        if line == "":
+            total_lines += 1
             continue
-        total += max(1, math.ceil(len(p) / approx_chars_per_line))
-    return max(1, total)
+
+        wrapped = textwrap.wrap(
+            line,
+            width=chars_per_line,
+            break_long_words=True,
+            break_on_hyphens=True,
+        )
+        total_lines += max(1, len(wrapped))
+
+    return max(1, total_lines)
 
 
 def autofit_row_heights(ws, start_row: int, end_row: int, widths_final: Dict[str, float]) -> None:
@@ -259,8 +281,11 @@ def autofit_row_heights(ws, start_row: int, end_row: int, widths_final: Dict[str
         for col in EXCEL_COLS:
             cell = ws[f"{col}{r}"]
             col_w = widths_final.get(col, DEFAULT_WIDTHS[col])
-            max_lines = max(max_lines, estimate_wrapped_lines(cell.value or "", col_w))
-        ws.row_dimensions[r].height = float(BASE_ROW_HEIGHT + (max_lines - 1) * LINE_HEIGHT)
+            max_lines = max(max_lines, estimate_wrapped_lines(cell.value, col_w))
+
+        ws.row_dimensions[r].height = float(
+            BASE_ROW_HEIGHT + (max_lines - 1) * LINE_HEIGHT + ROW_PADDING
+        )
 
 
 def build_excel_bytes(df: pd.DataFrame, list_title: str, widths: Dict[str, float]) -> bytes:
