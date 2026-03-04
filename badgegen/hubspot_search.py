@@ -1,5 +1,4 @@
 # badgegen/hubspot_search.py
-from __future__ import annotations
 
 from typing import Dict, Any, List, Optional
 import requests

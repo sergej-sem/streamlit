@@ -1,7 +1,5 @@
 # pages/03_Badge-Generator.py
-from __future__ import annotations
 
-import os
 import re
 from pathlib import Path
 from typing import Dict, Any, List
@@ -48,11 +46,7 @@ def _match_substring(haystack: str, needle: str) -> bool:
 
 
 def _historie_value_to_label(raw: str, value_to_label: Dict[str, str]) -> str:
-    """
-    HubSpot liefert bei Enumerations/Multi-Select oft interne VALUES (z. B. 26DORTN),
-    während du im UI das LABEL siehst (z. B. 26DOR_TN).
-    Hier mappen wir API-Values -> Labels für die Anzeige.
-    """
+    # Mappt HubSpot-Values (Enum/Multi) zu Labels für die Anzeige.
     s = (raw or "").strip()
     if not s:
         return ""
@@ -60,8 +54,6 @@ def _historie_value_to_label(raw: str, value_to_label: Dict[str, str]) -> str:
     mapped = [value_to_label.get(p, p) for p in parts]
     return ";".join(mapped)
 
-
-# ---------------- Main UI ----------------
 
 st.subheader("Suche (HubSpot-Logik)")
 
@@ -251,7 +243,7 @@ if unknown_cats:
     issues = True
     st.error("❌ Unerwartete Kategorie(n) gefunden:\n" + "\n".join(f"- {c}" for c in unknown_cats))
 
-missing_files = [p for p in tpl_map.values() if not os.path.exists(p)]
+missing_files = [p for p in tpl_map.values() if not Path(p).exists()]
 if missing_files:
     issues = True
     st.error("❌ Template-Dateien nicht gefunden:\n" + "\n".join(f"- {p}" for p in missing_files))

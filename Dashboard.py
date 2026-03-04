@@ -9,7 +9,8 @@ st.set_page_config(page_title="Dashboard", layout="wide")
 
 ROOT = Path(__file__).parent
 PAGES_DIR = ROOT / "pages"
-ROOT_CATEGORY = "__root__"  # interne Kategorie für Root-Pages (wird nicht angezeigt)
+ROOT_CATEGORY = "__root__"          # interne Kategorie für Root-Pages (wird nicht angezeigt)
+SEARCHBOX_KEY = "page_searchbox"    # eigener Key zum sauberen Reset
 
 
 # ---------- Styling (UX) ----------
@@ -26,6 +27,8 @@ st.markdown(
       div.block-container { padding-top: 2.2rem; }
       .muted { opacity: 0.7; font-size: 0.95rem; }
       .stCaption { margin-top: -0.25rem; }
+      .section-title { font-size: 1.35rem; font-weight: 700; margin: 1.1rem 0 0.6rem 0; }
+      .soft-divider { height: 1px; opacity: 0.12; margin: 1.25rem 0; background: currentColor; }
     </style>
     """,
     unsafe_allow_html=True,
@@ -72,14 +75,39 @@ def _collect_pages_cached(root_str: str, pages_dir_str: str):
     return pages
 
 
-def _go_to(item: dict):
-    # Zuletzt geöffnet merken
+def _dedupe_recent(recent_list: list[dict]) -> list[dict]:
+    seen = set()
+    out = []
+    for r in recent_list:
+        path = r.get("path")
+        if not path or path in seen:
+            continue
+        seen.add(path)
+        out.append(r)
+    return out
+
+
+def _clear_searchbox_state():
+    # searchbox speichert intern ein dict unter dem key
+    st.session_state.pop(SEARCHBOX_KEY, None)
+
+
+def _remember_recent(item: dict):
     recent = st.session_state.get("recent_pages", [])
-    recent = [x for x in recent if x["path"] != item["path"]]
+    recent = _dedupe_recent(recent)
+
+    # vorhandenen Eintrag entfernen
+    recent = [x for x in recent if x.get("path") != item["path"]]
+    # vorne einfügen
     recent.insert(0, {"path": item["path"], "title": item["title"]})
+    # speichern
     st.session_state["recent_pages"] = recent[:6]
 
-    # Navigation
+
+def _go_to(item: dict):
+    _remember_recent(item)
+    _clear_searchbox_state()
+
     if hasattr(st, "switch_page"):
         st.switch_page(item["path"])
     else:
@@ -101,110 +129,117 @@ def _render_grid(items: list[dict], key_prefix: str, cols_max: int = 4):
                 st.caption(item["category"])
 
 
+def _label_for_dropdown(p: dict, title_counts: dict[str, int]) -> str:
+    # Nur Titel anzeigen – Kategorie nur, wenn Titel mehrfach vorkommt
+    if title_counts.get(p["title"], 0) > 1 and p["category"] != ROOT_CATEGORY:
+        return f"{p['title']} · {p['category']}"
+    return p["title"]
+
+
 # ---------- UI ----------
-st.title("Dashboard")
-st.markdown('<div class="muted">Seite suchen oder direkt auswählen.</div>', unsafe_allow_html=True)
+st.markdown("<div class='section-title'>Dashboard</div>", unsafe_allow_html=True)
+st.markdown("<div class='muted'>Seite suchen oder direkt auswählen.</div>", unsafe_allow_html=True)
 
 pages_all = _collect_pages_cached(str(ROOT), str(PAGES_DIR))
 if not pages_all:
     st.info("Aktuell sind keine Seiten verfügbar.")
     st.stop()
 
-# Titel-Duplikate erkennen (damit Dropdown sauber bleibt)
-title_counts = {}
+# Titel-Duplikate für saubere Labels
+title_counts: dict[str, int] = {}
 for p in pages_all:
     title_counts[p["title"]] = title_counts.get(p["title"], 0) + 1
 
-# Default-Vorschläge (zuletzt geöffnet + Fallback)
-recent = st.session_state.get("recent_pages", [])
+# Default-Vorschläge: zuletzt geöffnet + Fallback
+recent = _dedupe_recent(st.session_state.get("recent_pages", []))
+st.session_state["recent_pages"] = recent  # ggf. alte Duplikate direkt bereinigen
+
 recent_paths = [r["path"] for r in recent]
 recent_items = [p for p in pages_all if p["path"] in recent_paths]
 fallback_items = pages_all[:8]
 
 default_items = []
 seen = set()
-for p in recent_items + fallback_items:
+for p in (recent_items + fallback_items):
     if p["path"] not in seen:
         default_items.append(p)
         seen.add(p["path"])
     if len(default_items) >= 8:
         break
 
-def _label_for_dropdown(p: dict) -> str:
-    # Standard: nur Titel (ohne Kategorie)
-    # Wenn Titel mehrfach vorkommt: Titel + Kategorie zur Unterscheidung
-    if title_counts.get(p["title"], 0) > 1 and p["category"] != ROOT_CATEGORY:
-        return f"{p['title']} · {p['category']}"
-    return p["title"]
+default_options = [(_label_for_dropdown(p, title_counts), p) for p in default_items]
 
-default_options = [(_label_for_dropdown(p), p) for p in default_items]
 
-# Search-Funktion: liefert nur Top-N Treffer (UX: schnell, "echte" Suche)
 def search_pages(searchterm: str):
     term = (searchterm or "").strip().lower()
     if not term:
         return []
 
-    results = []
+    scored = []
     for p in pages_all:
         hay = f"{p['title']} {p['category']}".lower()
         if term in hay:
-            # Ranking: startswith im Titel vor contains
+            # Ranking: Titel-startswith vor contains
             score = 0
             if p["title"].lower().startswith(term):
                 score -= 20
             elif p["category"].lower().startswith(term):
                 score -= 10
-            score += len(p["title"])  # leicht: kürzer = besser
-            results.append((score, p))
+            score += len(p["title"])
+            scored.append((score, p))
 
-    results.sort(key=lambda x: x[0])
-    top = [p for _, p in results[:10]]
-    return [(_label_for_dropdown(p), p) for p in top]
+    scored.sort(key=lambda x: x[0])
+    top = [p for _, p in scored[:10]]
+    return [(_label_for_dropdown(p, title_counts), p) for p in top]
 
-# --- Searchbox (Autocomplete Dropdown beim Tippen) ---
-selected = st_searchbox(
+
+def _on_submit(selected_item):
+    # Wird aufgerufen bei Auswahl (Click ODER Enter auf markiertem Vorschlag)
+    if isinstance(selected_item, dict) and "path" in selected_item:
+        _go_to(selected_item)
+
+
+# Searchbox: Navigation direkt in submit_function (kein "sticky selected" mehr)
+st_searchbox(
     search_pages,
+    key=SEARCHBOX_KEY,
     placeholder="Seite suchen …",
     label=None,
-    clear_on_submit=True,
     default=None,
     default_options=default_options,
     debounce=120,
+    clear_on_submit=True,
+    submit_function=_on_submit,
 )
 
-# Sofort weiterleiten, wenn ausgewählt
-if selected:
-    _go_to(selected)
-
-# Luft statt Linien
-st.markdown("<div style='height: 1.2rem'></div>", unsafe_allow_html=True)
+st.caption("Tipp: Enter öffnet den ersten Treffer.")
 
 # ---- Zuletzt geöffnet ----
-recent = st.session_state.get("recent_pages", [])
-if recent:
-    st.subheader("Zuletzt geöffnet")
-    recent_items = []
-    for r in recent:
-        item = next((p for p in pages_all if p["path"] == r["path"]), None)
-        if item:
-            recent_items.append(item)
-    _render_grid(recent_items, key_prefix="recent", cols_max=4)
-    st.markdown("<div style='height: 1.2rem'></div>", unsafe_allow_html=True)
+recent = _dedupe_recent(st.session_state.get("recent_pages", []))
+recent_items = []
+for r in recent:
+    item = next((p for p in pages_all if p["path"] == r["path"]), None)
+    if item:
+        recent_items.append(item)
 
-# ---- Alle Seiten (Root zuerst ohne Überschrift, dann Kategorien) ----
+if recent_items:
+    st.markdown("<div class='soft-divider'></div>", unsafe_allow_html=True)
+    st.markdown("<div class='section-title'>Zuletzt geöffnet</div>", unsafe_allow_html=True)
+    _render_grid(recent_items, key_prefix="recent", cols_max=4)
+
+# ---- Alle Bereiche ----
+st.markdown("<div class='soft-divider'></div>", unsafe_allow_html=True)
+st.markdown("<div class='section-title'>Alle Bereiche</div>", unsafe_allow_html=True)
+
 root_items = sorted([p for p in pages_all if p["category"] == ROOT_CATEGORY], key=lambda x: x["title"])
 other_cats = sorted({p["category"] for p in pages_all if p["category"] != ROOT_CATEGORY})
 
-# Root-Pages: ohne Überschrift
+# Root-Pages (ohne Überschrift)
 if root_items:
     _render_grid(root_items, key_prefix="nav_root", cols_max=4)
-    if other_cats:
-        st.markdown("<div style='height: 1.0rem'></div>", unsafe_allow_html=True)
 
 # Kategorien
 for cat in other_cats:
-    st.subheader(cat)
+    st.markdown(f"<div class='section-title' style='font-size:1.15rem; margin-top:1.0rem'>{cat}</div>", unsafe_allow_html=True)
     items = sorted([p for p in pages_all if p["category"] == cat], key=lambda x: x["title"])
     _render_grid(items, key_prefix=f"nav_{cat}", cols_max=4)
-    st.markdown("<div style='height: 0.6rem'></div>", unsafe_allow_html=True)
