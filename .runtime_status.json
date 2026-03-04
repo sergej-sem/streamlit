@@ -1,0 +1,13 @@
+{
+  "checked_at": "2026-03-04T13:34:17.810081+00:00",
+  "hubspot": {
+    "configured": true,
+    "ok": true,
+    "detail": "CRM Contacts: 200"
+  },
+  "graph": {
+    "configured": false,
+    "ok": false,
+    "detail": "Credentials fehlen"
+  }
+}

@@ -1,0 +1,1 @@
+# badgegen/__init__.py

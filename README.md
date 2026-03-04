@@ -1,2 +1,2 @@
 run command:
-streamlit run streamlit_app.py
+streamlit run Dashboard.py
