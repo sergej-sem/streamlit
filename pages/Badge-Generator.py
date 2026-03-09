@@ -9,7 +9,11 @@ import streamlit as st
 
 from badgegen.hubspot_search import (
     search_contacts_auto_split,
-    P_FIRSTNAME, P_LASTNAME, P_COMPANY, P_JOBTITLE, P_HISTORIE,
+    P_FIRSTNAME,
+    P_LASTNAME,
+    P_COMPANY,
+    P_JOBTITLE,
+    P_HISTORIE,
 )
 from badgegen.historie_options import fetch_historie_options
 from badgegen.category import derive_kategorie_from_historie, ALLOWED_CATEGORIES
@@ -46,13 +50,29 @@ def _match_substring(haystack: str, needle: str) -> bool:
 
 
 def _historie_value_to_label(raw: str, value_to_label: Dict[str, str]) -> str:
-    # Mappt HubSpot-Values (Enum/Multi) zu Labels für die Anzeige.
     s = (raw or "").strip()
     if not s:
         return ""
     parts = [p.strip() for p in re.split(r"[;\n,]+", s) if p.strip()]
     mapped = [value_to_label.get(p, p) for p in parts]
     return ";".join(mapped)
+
+
+@st.cache_data(ttl=300)
+def _build_pdf_cached(
+    df_out: pd.DataFrame,
+    tpl_map: Dict[str, str],
+    uppercase_names: bool,
+    uppercase_company: bool,
+    print_record_id: bool,
+) -> bytes:
+    return render_badges_pdf_bytes(
+        rows=df_out.to_dict("records"),
+        template_by_category=tpl_map,
+        uppercase_names=uppercase_names,
+        uppercase_company=uppercase_company,
+        print_record_id=print_record_id,
+    )
 
 
 st.subheader("Suche (HubSpot-Logik)")
@@ -87,7 +107,6 @@ with col_filters:
 
     historie_opts = _cached_historie_options()
 
-    # compiled_groups: [{"server_filters": [...], "local_contains":[...]}] pro (expandierter) Gruppe
     compiled_groups = render_filter_builder(
         token=token,
         historie_options=historie_opts,
@@ -98,17 +117,24 @@ with col_filters:
     if not has_any:
         st.warning("Bitte mindestens einen Filter setzen.")
 
-# Hinweis: Wenn nur "enthält" (Text) ohne einschränkenden Filter gesetzt ist,
-# müssten wir ansonsten ALLE Kontakte laden (sehr langsam). Deshalb verlangen wir dann einen weiteren Filter.
-needs_more_filters = any((not (g.get("server_filters") or [])) and (g.get("local_contains") or []) for g in compiled_groups)
+needs_more_filters = any(
+    (not (g.get("server_filters") or [])) and (g.get("local_contains") or [])
+    for g in compiled_groups
+)
 if needs_more_filters:
-    st.warning("Diese Suche wäre zu breit (nur „enthält“ ohne einschränkenden Filter). Bitte setze zusätzlich z. B. „Historie“ oder einen „ist genau“-Filter.")
+    st.warning(
+        "Diese Suche wäre zu breit (nur „enthält“ ohne einschränkenden Filter). "
+        "Bitte setze zusätzlich z. B. „Historie“ oder einen „ist genau“-Filter."
+    )
 
 st.divider()
-search_clicked = st.button("🔎 Suchen", type="primary", use_container_width=True, disabled=(not has_any or needs_more_filters))
+search_clicked = st.button(
+    "Suchen",
+    type="primary",
+    use_container_width=True,
+    disabled=(not has_any or needs_more_filters),
+)
 
-
-# ---------------- Search / Results ----------------
 
 def _search_group(server_filters: List[dict], local_contains: List[dict]) -> List[Dict[str, Any]]:
     props = [P_FIRSTNAME, P_LASTNAME, P_COMPANY, P_JOBTITLE, P_HISTORIE]
@@ -161,14 +187,16 @@ def run_search_cached(compiled_groups: List[dict]) -> pd.DataFrame:
     rows: List[Dict[str, Any]] = []
     for c in by_id.values():
         pr = c.get("properties", {}) or {}
-        rows.append({
-            "id": c.get("id"),
-            "firstname": (pr.get(P_FIRSTNAME) or "").strip(),
-            "lastname": (pr.get(P_LASTNAME) or "").strip(),
-            "company": pr.get(P_COMPANY) or "",
-            "jobtitle": pr.get(P_JOBTITLE) or "",
-            "historie": pr.get(P_HISTORIE) or "",
-        })
+        rows.append(
+            {
+                "id": c.get("id"),
+                "firstname": (pr.get(P_FIRSTNAME) or "").strip(),
+                "lastname": (pr.get(P_LASTNAME) or "").strip(),
+                "company": pr.get(P_COMPANY) or "",
+                "jobtitle": pr.get(P_JOBTITLE) or "",
+                "historie": pr.get(P_HISTORIE) or "",
+            }
+        )
 
     return pd.DataFrame(rows)
 
@@ -177,8 +205,12 @@ st.subheader("1) Kontakte suchen")
 
 if search_clicked:
     if needs_more_filters:
-        st.info("Setze bitte mindestens einen einschränkenden Filter (z. B. Historie), dann funktioniert die Suche zuverlässig.")
+        st.info(
+            "Setze bitte mindestens einen einschränkenden Filter (z. B. Historie), "
+            "dann funktioniert die Suche zuverlässig."
+        )
         st.stop()
+
     try:
         df_new = run_search_cached(compiled_groups)
     except Exception as e:
@@ -189,25 +221,27 @@ if search_clicked:
         st.warning("Keine Kontakte gefunden.")
         st.stop()
 
-    # Historie: Rohwert kurzzeitig behalten -> Labels für Anzeige
     value_to_label = {val: lbl for (lbl, val) in historie_opts} if historie_opts else {}
+
     df_new["historie_raw"] = df_new["historie"]
     df_new["historie"] = df_new["historie_raw"].apply(lambda s: _historie_value_to_label(s, value_to_label))
 
-    # Kategorie-Ermittlung bevorzugt auf Labels (damit 26DORTN -> 26DOR_TN sauber erkannt wird)
     df_new["kategorie"] = df_new["historie"].apply(lambda h: derive_kategorie_from_historie(h, event_tag.strip()))
 
-    # Fallback: falls doch mal nichts erkannt wird, noch einmal auf dem Rohwert versuchen
     missing = df_new["kategorie"].isna() | (df_new["kategorie"].astype(str).str.strip() == "")
     if missing.any():
         df_new.loc[missing, "kategorie"] = df_new.loc[missing, "historie_raw"].apply(
             lambda h: derive_kategorie_from_historie(h, event_tag.strip())
         )
 
-    # historie_raw NICHT anzeigen / nicht speichern
     df_new.drop(columns=["historie_raw"], inplace=True, errors="ignore")
 
     st.session_state["df_badges"] = df_new
+
+    # WICHTIG: jede neue Suche bekommt eine neue Run-ID -> Button-Text reset
+    st.session_state["df_badges_run_id"] = st.session_state.get("df_badges_run_id", 0) + 1
+    st.session_state["badges_pdf_downloaded"] = False
+    st.session_state.pop("badges_pdf_sig", None)
 
 
 df: pd.DataFrame = st.session_state.get("df_badges", pd.DataFrame())
@@ -220,7 +254,6 @@ st.subheader("2) Vorschau & Prüfung")
 total_hits = len(df)
 st.info(f"Treffer insgesamt: {total_hits}. Hinweis: Es werden nur die ersten 50 Kontakte angezeigt.")
 
-# Anzeige: kategorie vor historie, historie_raw ausgeblendet
 display_cols = ["id", "firstname", "lastname", "company", "jobtitle", "kategorie", "historie"]
 display_cols = [c for c in display_cols if c in df.columns]
 
@@ -232,7 +265,10 @@ issues = False
 missing_cat = df[df["kategorie"].isna() | (df["kategorie"].astype(str).str.strip() == "")]
 if not missing_cat.empty:
     issues = True
-    st.error(f"❌ Kategorie konnte NICHT ermittelt werden für {len(missing_cat)} Kontakt(e). Ohne Kategorie wird KEIN PDF erzeugt.")
+    st.error(
+        f"❌ Kategorie konnte NICHT ermittelt werden für {len(missing_cat)} Kontakt(e). "
+        "Ohne Kategorie wird KEIN PDF erzeugt."
+    )
     cols = ["id", "firstname", "lastname", "historie"]
     cols = [c for c in cols if c in missing_cat.columns]
     st.dataframe(missing_cat[cols].head(50), use_container_width=True, height=220)
@@ -252,27 +288,53 @@ if issues:
     st.stop()
 
 st.subheader("3) PDF erzeugen")
+
 cats_present = sorted([c for c in df["kategorie"].dropna().unique().tolist() if str(c).strip()])
 selected = st.multiselect("Kategorien auswählen", options=cats_present, default=cats_present)
 
 df_out = df[df["kategorie"].isin(selected)] if selected else df
+if df_out.empty:
+    st.warning("Keine Kontakte in den ausgewählten Kategorien.")
+    st.stop()
 
-if st.button("PDF erstellen", type="primary"):
-    try:
-        pdf_bytes = render_badges_pdf_bytes(
-            rows=df_out.to_dict("records"),
-            template_by_category=tpl_map,
-            uppercase_names=uppercase_names,
-            uppercase_company=uppercase_company,
-            print_record_id=print_record_id,
-        )
-    except Exception as e:
-        st.error(f"❌ Fehler beim PDF-Rendern: {e}")
-        st.stop()
+run_id = st.session_state.get("df_badges_run_id", 0)
 
-    st.download_button(
-        "Download Badges.pdf",
-        data=pdf_bytes,
-        file_name=f"Badges_{event_tag.strip()}.pdf",
-        mime="application/pdf",
+current_sig = (
+    run_id,
+    tuple(selected),
+    int(len(df_out)),
+    event_tag.strip(),
+    bool(uppercase_names),
+    bool(uppercase_company),
+    bool(print_record_id),
+    tuple(sorted(tpl_map.items())),
+)
+
+if st.session_state.get("badges_pdf_sig") != current_sig:
+    st.session_state["badges_pdf_sig"] = current_sig
+    st.session_state["badges_pdf_downloaded"] = False
+
+with st.spinner("PDF wird vorbereitet …"):
+    pdf_bytes = _build_pdf_cached(
+        df_out=df_out,
+        tpl_map=tpl_map,
+        uppercase_names=uppercase_names,
+        uppercase_company=uppercase_company,
+        print_record_id=print_record_id,
     )
+
+
+def _mark_downloaded() -> None:
+    st.session_state["badges_pdf_downloaded"] = True
+
+
+label = "Nochmal herunterladen" if st.session_state.get("badges_pdf_downloaded") else "PDF erstellen"
+
+st.download_button(
+    label,
+    data=pdf_bytes,
+    file_name=f"Badges_{event_tag.strip()}.pdf",
+    mime="application/pdf",
+    type="primary",
+    on_click=_mark_downloaded,
+)

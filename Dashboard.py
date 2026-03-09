@@ -138,7 +138,6 @@ def _label_for_dropdown(p: dict, title_counts: dict[str, int]) -> str:
 
 # ---------- UI ----------
 st.markdown("<div class='section-title'>Dashboard</div>", unsafe_allow_html=True)
-st.markdown("<div class='muted'>Seite suchen oder direkt auswählen.</div>", unsafe_allow_html=True)
 
 pages_all = _collect_pages_cached(str(ROOT), str(PAGES_DIR))
 if not pages_all:
@@ -211,8 +210,6 @@ st_searchbox(
     clear_on_submit=True,
     submit_function=_on_submit,
 )
-
-st.caption("Tipp: Enter öffnet den ersten Treffer.")
 
 # ---- Zuletzt geöffnet ----
 recent = _dedupe_recent(st.session_state.get("recent_pages", []))

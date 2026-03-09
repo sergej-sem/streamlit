@@ -8,6 +8,9 @@ from reportlab.lib.units import mm
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfgen import canvas
+from reportlab.graphics.barcode import qr
+from reportlab.graphics.shapes import Drawing
+from reportlab.graphics import renderPDF
 
 # A6 hochkant
 A6_W, A6_H = 105 * mm, 148 * mm
@@ -22,10 +25,10 @@ TEXT_BOXES_MM = {
 }
 
 # Fonts
-FONT_NAME_FIRST = "Times-Bold"
-FONT_NAME_LAST = "Times-Bold"
-FONT_NAME_COMPANY = "Times-Bold"
-FONT_NAME_JOB = "Times-Roman"
+FONT_NAME_FIRST = "Helvetica-Bold"
+FONT_NAME_LAST = "Helvetica-Bold"
+FONT_NAME_COMPANY = "Helvetica-Bold"
+FONT_NAME_JOB = "Helvetica"
 FONT_NAME_ID = "Helvetica"
 
 FONT_SIZE_FIRST_MAX = 52
@@ -193,8 +196,31 @@ def render_badges_pdf_bytes(
         # Datensatz-ID
         if print_record_id and record_id:
             x0, x1, y0, y1 = box_id
-            lines, size, lh = _fit_text_in_box(c, record_id, FONT_NAME_ID, FONT_SIZE_ID, FONT_SIZE_ID, x1-x0, y1-y0, 1)
+            lines, size, lh = _fit_text_in_box(
+                c,
+                record_id,
+                FONT_NAME_ID,
+                FONT_SIZE_ID,
+                FONT_SIZE_ID,
+                x1 - x0,
+                y1 - y0,
+                1,
+            )
             _draw_centered_lines_in_box(c, lines, FONT_NAME_ID, size, x0, x1, y0, y1, lh)
+
+        # QR-Code aus Datensatz-ID (unten rechts)
+        if record_id:
+            qr_widget = qr.QrCodeWidget(record_id)
+            bounds = qr_widget.getBounds()
+            w = bounds[2] - bounds[0]
+            h = bounds[3] - bounds[1]
+            qr_size = 28 * mm
+            drawing = Drawing(qr_size, qr_size, transform=[qr_size / w, 0, 0, qr_size / h, 0, 0])
+            drawing.add(qr_widget)
+
+            qr_x = A6_W - qr_size - 10 * mm
+            qr_y = 10 * mm
+            renderPDF.draw(drawing, c, qr_x, qr_y)
 
         c.showPage()
 
