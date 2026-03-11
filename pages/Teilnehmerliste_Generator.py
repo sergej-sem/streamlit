@@ -1,8 +1,10 @@
+import base64
 import time
 from pathlib import Path
 
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 
 from teilnehmerliste_generator.hubspot_client import (
     get_contact_lists,
@@ -108,41 +110,103 @@ if not lists_map:
     st.error("Keine Listen aus der API erhalten. Prüfe Portal/Token/Scopes.")
     st.stop()
 
-selected_name = st.selectbox("Segment auswählen", list(lists_map.keys()))
+selected_name = st.selectbox(
+    "Segment auswählen",
+    list(lists_map.keys()),
+    index=None,
+    placeholder="Segment wählen...",
+)
+
+if selected_name is None:
+    st.stop()
+
 list_id = lists_map[selected_name]
 st.caption(f"List ID: {list_id}")
 
-if st.button("PDF erstellen", type="primary"):
-    with st.spinner("Mitglieder laden..."):
-        ids = get_list_members(list_id)
+# --- Session-State-Initialisierung ---
+for _key, _default in [
+    ("pdf_bytes", None),
+    ("pdf_ready", False),
+    ("pdf_row_count", 0),
+    ("last_list_id", None),
+]:
+    if _key not in st.session_state:
+        st.session_state[_key] = _default
 
-    if not ids:
-        st.warning("Diese Liste enthält 0 Kontakte.")
-        st.stop()
+# Zurücksetzen wenn neue Liste ausgewählt wird
+if st.session_state.last_list_id != list_id:
+    st.session_state.last_list_id = list_id
+    st.session_state.pdf_ready = False
+    st.session_state.pdf_bytes = None
 
-    with st.spinner("Kontakte laden (company, jobtitle)..."):
-        contacts = get_contacts_by_ids(ids, properties=["company", "jobtitle"])
+if not st.session_state.pdf_ready:
+    if st.button("PDF erstellen", type="primary"):
+        with st.spinner("Mitglieder laden..."):
+            ids = get_list_members(list_id)
 
-    df_raw = pd.DataFrame([c.get("properties", {}) for c in contacts])
+        if not ids:
+            st.warning("Diese Liste enthält 0 Kontakte.")
+            st.stop()
 
-    with st.spinner("Regeln anwenden..."):
-        df_out = build_teilnehmerliste(df_raw, lang=lang)
+        with st.spinner("Kontakte laden (company, jobtitle)..."):
+            contacts = get_contacts_by_ids(ids, properties=["company", "jobtitle"])
 
-    with st.spinner("PDF rendern..."):
-        pdf_bytes = generate_pdf_bytes(
-            df=df_out,
-            template_p1=TEMPLATE_P1,
-            template_p2=TEMPLATE_P2,
-            font_dir=FONT_DIR,
-            lang=lang,
+        df_raw = pd.DataFrame([c.get("properties", {}) for c in contacts])
+
+        with st.spinner("Regeln anwenden..."):
+            df_out = build_teilnehmerliste(df_raw, lang=lang)
+
+        with st.spinner("PDF rendern..."):
+            pdf_bytes = generate_pdf_bytes(
+                df=df_out,
+                template_p1=TEMPLATE_P1,
+                template_p2=TEMPLATE_P2,
+                font_dir=FONT_DIR,
+                lang=lang,
+            )
+
+        st.session_state.pdf_bytes = pdf_bytes
+        st.session_state.pdf_ready = True
+        st.session_state.pdf_row_count = len(df_out)
+
+        st.success(f"Fertig: {len(df_out)} Zeilen (max. 2 pro Firma).")
+
+        # Automatischer Download via JS (Blob URL über window.parent, da data:-URLs aus iframes geblockt werden)
+        b64 = base64.b64encode(pdf_bytes).decode()
+        components.html(
+            f"""<script>
+              (function() {{
+                var b64 = '{b64}';
+                var byteChars = atob(b64);
+                var byteArray = new Uint8Array(byteChars.length);
+                for (var i = 0; i < byteChars.length; i++) {{
+                  byteArray[i] = byteChars.charCodeAt(i);
+                }}
+                var blob = new Blob([byteArray], {{type: 'application/pdf'}});
+                var url = URL.createObjectURL(blob);
+                var a = window.parent.document.createElement('a');
+                a.href = url;
+                a.download = 'Teilnehmerliste.pdf';
+                window.parent.document.body.appendChild(a);
+                a.click();
+                window.parent.document.body.removeChild(a);
+                setTimeout(function() {{ URL.revokeObjectURL(url); }}, 100);
+              }})();
+            </script>""",
+            height=0,
         )
 
-    st.success(f"Fertig: {len(df_out)} Zeilen (max. 2 pro Firma).")
-    st.dataframe(df_out, use_container_width=True)
-
+        st.download_button(
+            "Nochmal herunterladen",
+            data=pdf_bytes,
+            file_name="Teilnehmerliste.pdf",
+            mime="application/pdf",
+        )
+else:
+    st.success(f"Fertig: {st.session_state.pdf_row_count} Zeilen (max. 2 pro Firma).")
     st.download_button(
-        "Teilnehmerliste.pdf herunterladen",
-        data=pdf_bytes,
+        "Nochmal herunterladen",
+        data=st.session_state.pdf_bytes,
         file_name="Teilnehmerliste.pdf",
         mime="application/pdf",
     )

@@ -15,16 +15,22 @@ from reportlab.graphics import renderPDF
 # A6 hochkant
 A6_W, A6_H = 105 * mm, 148 * mm
 
-# Boxen in mm (aus Badge-Beispiel abgeleitet)
+# A6 = 105 x 148 mm.  Header/Logo belegt ca. y > 118 mm.
+# Alle vier Textfelder eng gruppiert unterhalb des Headers.
+# Reihenfolge von oben nach unten: Vorname → Nachname → Firma → Jobtitel
+# (x0, x1, y_bottom, y_top) in mm – ReportLab: y=0 ist unten
 TEXT_BOXES_MM = {
-    "firstname": (10.0, 95.0, 118.46, 126.86),
-    "lastname":  (10.0, 95.0, 108.09, 114.63),
-    "jobtitle":  (10.0, 95.0,  98.09, 104.68),
-    "company":   (10.0, 95.0,  63.89,  71.58),
-    "record_id": (10.0, 95.0,   8.8,   12.2),
+    "firstname": (10.0, 95.0, 100.0, 112.0),
+    "lastname":  (10.0, 95.0,  89.0,  99.0),
+    "company":   (10.0, 95.0,  79.0,  88.0),
+    "jobtitle":  (10.0, 95.0,  71.0,  78.0),
+    "record_id": (10.0, 95.0,   2.0,   6.0),
 }
 
-# Fonts
+# QR-Code: 30 mm Quadrat, horizontal zentriert, unterer Bereich
+QR_BOX_MM = (37.5, 67.5, 10.0, 40.0)
+
+# Fonts – Beispielbadge nutzt eine serifenlose Schrift (ähnlich Arial)
 FONT_NAME_FIRST = "Helvetica-Bold"
 FONT_NAME_LAST = "Helvetica-Bold"
 FONT_NAME_COMPANY = "Helvetica-Bold"
@@ -33,8 +39,8 @@ FONT_NAME_ID = "Helvetica"
 
 FONT_SIZE_FIRST_MAX = 52
 FONT_SIZE_LAST_MAX = 48
-FONT_SIZE_COMPANY_MAX = 52
-FONT_SIZE_JOB_MAX = 34
+FONT_SIZE_COMPANY_MAX = 40
+FONT_SIZE_JOB_MAX = 30
 FONT_SIZE_ID = 9
 
 MIN_FONT_SIZE = 12
@@ -183,17 +189,17 @@ def render_badges_pdf_bytes(
         lines, size, lh = _fit_text_in_box(c, lastname, FONT_NAME_LAST, FONT_SIZE_LAST_MAX, MIN_FONT_SIZE, x1-x0, y1-y0, 2)
         _draw_centered_lines_in_box(c, lines, FONT_NAME_LAST, size, x0, x1, y0, y1, lh)
 
-        # Jobtitel
-        x0, x1, y0, y1 = box_job
-        lines, size, lh = _fit_text_in_box(c, jobtitle, FONT_NAME_JOB, FONT_SIZE_JOB_MAX, MIN_FONT_SIZE, x1-x0, y1-y0, 2)
-        _draw_centered_lines_in_box(c, lines, FONT_NAME_JOB, size, x0, x1, y0, y1, lh)
-
-        # Firma
+        # Firma (3. von oben)
         x0, x1, y0, y1 = box_company
         lines, size, lh = _fit_text_in_box(c, company, FONT_NAME_COMPANY, FONT_SIZE_COMPANY_MAX, MIN_FONT_SIZE, x1-x0, y1-y0, 2)
         _draw_centered_lines_in_box(c, lines, FONT_NAME_COMPANY, size, x0, x1, y0, y1, lh)
 
-        # Datensatz-ID
+        # Jobtitel (4. von oben)
+        x0, x1, y0, y1 = box_job
+        lines, size, lh = _fit_text_in_box(c, jobtitle, FONT_NAME_JOB, FONT_SIZE_JOB_MAX, MIN_FONT_SIZE, x1-x0, y1-y0, 2)
+        _draw_centered_lines_in_box(c, lines, FONT_NAME_JOB, size, x0, x1, y0, y1, lh)
+
+        # Datensatz-ID (Text)
         if print_record_id and record_id:
             x0, x1, y0, y1 = box_id
             lines, size, lh = _fit_text_in_box(
@@ -206,21 +212,41 @@ def render_badges_pdf_bytes(
                 y1 - y0,
                 1,
             )
-            _draw_centered_lines_in_box(c, lines, FONT_NAME_ID, size, x0, x1, y0, y1, lh)
+            _draw_centered_lines_in_box(
+                c, lines, FONT_NAME_ID, size, x0, x1, y0, y1, lh
+            )
 
-        # QR-Code aus Datensatz-ID (unten rechts)
-        if record_id:
-            qr_widget = qr.QrCodeWidget(record_id)
+        # QR-Code (kodiert die Datensatz-ID, falls vorhanden, sonst Name+Firma)
+        qr_data = record_id or " ".join(
+            part
+            for part in [firstname, lastname, company]
+            if part
+        )
+        if qr_data:
+            qx0, qx1, qy0, qy1 = _mm_box_to_points(QR_BOX_MM)
+            qr_box_w = qx1 - qx0
+            qr_box_h = qy1 - qy0
+            qr_size = min(qr_box_w, qr_box_h)
+
+            qr_widget = qr.QrCodeWidget(qr_data)
             bounds = qr_widget.getBounds()
             w = bounds[2] - bounds[0]
             h = bounds[3] - bounds[1]
-            qr_size = 28 * mm
-            drawing = Drawing(qr_size, qr_size, transform=[qr_size / w, 0, 0, qr_size / h, 0, 0])
-            drawing.add(qr_widget)
 
-            qr_x = A6_W - qr_size - 10 * mm
-            qr_y = 10 * mm
-            renderPDF.draw(drawing, c, qr_x, qr_y)
+            # Skalierung über den Drawing-Transform, nicht über das Widget
+            if w > 0 and h > 0:
+                scale = qr_size / max(w, h)
+                drawing = Drawing(
+                    qr_size,
+                    qr_size,
+                    transform=[scale, 0, 0, scale, 0, 0],
+                )
+            else:
+                drawing = Drawing(qr_size, qr_size)
+
+            drawing.add(qr_widget)
+            # leicht vom Rand einrücken
+            renderPDF.draw(drawing, c, qx0, qy0)
 
         c.showPage()
 
