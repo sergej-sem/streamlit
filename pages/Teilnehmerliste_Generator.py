@@ -4,7 +4,8 @@ import time
 from pathlib import Path
 
 import pandas as pd
-import pikepdf
+from pypdf import PdfReader, PdfWriter
+from pypdf.generic import ArrayObject, FloatObject, NameObject, NullObject
 import streamlit as st
 import streamlit.components.v1 as components
 
@@ -182,19 +183,30 @@ if not st.session_state.pdf_ready:
                 lang=lang,
             )
 
-        if encrypt:
-            with st.spinner("PDF verschlüsseln..."):
-                with pikepdf.open(io.BytesIO(pdf_bytes)) as _pdf:
-                    _out = io.BytesIO()
-                    _pdf.save(
-                        _out,
-                        encryption=pikepdf.Encryption(
-                            owner=pdf_password,
-                            user=pdf_password,
-                            R=6,
-                        ),
-                    )
-                    pdf_bytes = _out.getvalue()
+        with st.spinner("PDF finalisieren..."):
+            _reader = PdfReader(io.BytesIO(pdf_bytes))
+            _writer = PdfWriter()
+            _writer.append(_reader)
+
+            # Anfangszoom auf 75 % setzen
+            _writer._root_object[NameObject("/OpenAction")] = ArrayObject([
+                _writer.pages[0].indirect_reference,
+                NameObject("/XYZ"),
+                NullObject(),
+                NullObject(),
+                FloatObject(0.75),
+            ])
+
+            if encrypt:
+                _writer.encrypt(
+                    user_password=pdf_password,
+                    owner_password=pdf_password,
+                    algorithm="AES-256",
+                )
+
+            _out = io.BytesIO()
+            _writer.write(_out)
+            pdf_bytes = _out.getvalue()
 
         st.session_state.pdf_bytes = pdf_bytes
         st.session_state.pdf_ready = True
