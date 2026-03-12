@@ -8,6 +8,7 @@ from PIL import Image
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.pdfdoc import PDFDestinationXYZ
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas
 
@@ -223,6 +224,10 @@ def generate_pdf_bytes(
             c.drawString(base_x_job, y_job, job_txt)
 
         c.showPage()
+
+    # Anfangszoom auf 75 % setzen (PDF-Standard /OpenAction /XYZ)
+    first_page_ref = c._doc.Pages.pages[0]
+    c._doc.Catalog.OpenAction = PDFDestinationXYZ(first_page_ref, 0, PAGE_H, 0.75)
 
     c.save()
     return buf.getvalue()

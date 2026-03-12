@@ -1,8 +1,10 @@
 import base64
+import io
 import time
 from pathlib import Path
 
 import pandas as pd
+import pikepdf
 import streamlit as st
 import streamlit.components.v1 as components
 
@@ -127,6 +129,15 @@ st.caption(f"List ID: {list_id}")
 _safe_name = "".join(c if c not in r'\/:*?"<>|' else "_" for c in selected_name)
 pdf_filename = f"{_safe_name}_Teilnehmerliste_{lang}.pdf"
 
+# --- Verschlüsselung ---
+encrypt = st.checkbox("PDF verschlüsseln")
+pdf_password = ""
+if encrypt:
+    pdf_password = st.text_input("Passwort", type="password", placeholder="Passwort eingeben...")
+    if not pdf_password:
+        st.warning("Bitte ein Passwort eingeben.")
+        st.stop()
+
 # --- Session-State-Initialisierung ---
 for _key, _default in [
     ("pdf_bytes", None),
@@ -138,8 +149,8 @@ for _key, _default in [
     if _key not in st.session_state:
         st.session_state[_key] = _default
 
-# Zurücksetzen wenn Liste, Stadt oder Sprache geändert wird
-_current_pdf_key = (list_id, city_code, lang)
+# Zurücksetzen wenn Liste, Stadt, Sprache, Verschlüsselung oder Passwort geändert wird
+_current_pdf_key = (list_id, city_code, lang, encrypt, pdf_password)
 if st.session_state.last_pdf_key != _current_pdf_key:
     st.session_state.last_pdf_key = _current_pdf_key
     st.session_state.pdf_ready = False
@@ -170,6 +181,20 @@ if not st.session_state.pdf_ready:
                 font_dir=FONT_DIR,
                 lang=lang,
             )
+
+        if encrypt:
+            with st.spinner("PDF verschlüsseln..."):
+                with pikepdf.open(io.BytesIO(pdf_bytes)) as _pdf:
+                    _out = io.BytesIO()
+                    _pdf.save(
+                        _out,
+                        encryption=pikepdf.Encryption(
+                            owner=pdf_password,
+                            user=pdf_password,
+                            R=6,
+                        ),
+                    )
+                    pdf_bytes = _out.getvalue()
 
         st.session_state.pdf_bytes = pdf_bytes
         st.session_state.pdf_ready = True
