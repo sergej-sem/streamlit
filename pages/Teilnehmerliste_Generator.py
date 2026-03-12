@@ -123,19 +123,25 @@ if selected_name is None:
 list_id = lists_map[selected_name]
 st.caption(f"List ID: {list_id}")
 
+# --- Dateiname ---
+_safe_name = "".join(c if c not in r'\/:*?"<>|' else "_" for c in selected_name)
+pdf_filename = f"{_safe_name}_Teilnehmerliste_{lang}.pdf"
+
 # --- Session-State-Initialisierung ---
 for _key, _default in [
     ("pdf_bytes", None),
     ("pdf_ready", False),
     ("pdf_row_count", 0),
-    ("last_list_id", None),
+    ("pdf_filename", "Teilnehmerliste.pdf"),
+    ("last_pdf_key", None),
 ]:
     if _key not in st.session_state:
         st.session_state[_key] = _default
 
-# Zurücksetzen wenn neue Liste ausgewählt wird
-if st.session_state.last_list_id != list_id:
-    st.session_state.last_list_id = list_id
+# Zurücksetzen wenn Liste, Stadt oder Sprache geändert wird
+_current_pdf_key = (list_id, city_code, lang)
+if st.session_state.last_pdf_key != _current_pdf_key:
+    st.session_state.last_pdf_key = _current_pdf_key
     st.session_state.pdf_ready = False
     st.session_state.pdf_bytes = None
 
@@ -168,6 +174,7 @@ if not st.session_state.pdf_ready:
         st.session_state.pdf_bytes = pdf_bytes
         st.session_state.pdf_ready = True
         st.session_state.pdf_row_count = len(df_out)
+        st.session_state.pdf_filename = pdf_filename
 
         st.success(f"Fertig: {len(df_out)} Zeilen (max. 2 pro Firma).")
 
@@ -186,7 +193,7 @@ if not st.session_state.pdf_ready:
                 var url = URL.createObjectURL(blob);
                 var a = window.parent.document.createElement('a');
                 a.href = url;
-                a.download = 'Teilnehmerliste.pdf';
+                a.download = '{pdf_filename}';
                 window.parent.document.body.appendChild(a);
                 a.click();
                 window.parent.document.body.removeChild(a);
@@ -199,7 +206,7 @@ if not st.session_state.pdf_ready:
         st.download_button(
             "Nochmal herunterladen",
             data=pdf_bytes,
-            file_name="Teilnehmerliste.pdf",
+            file_name=pdf_filename,
             mime="application/pdf",
         )
 else:
@@ -207,6 +214,6 @@ else:
     st.download_button(
         "Nochmal herunterladen",
         data=st.session_state.pdf_bytes,
-        file_name="Teilnehmerliste.pdf",
+        file_name=st.session_state.pdf_filename,
         mime="application/pdf",
     )
