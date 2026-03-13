@@ -81,7 +81,10 @@ def _cached_suggest_values_context(
     if context_groups and len(context_groups) <= SUGGEST_MAX_FILTERGROUPS:
         payload["filterGroups"] = context_groups
 
-    data = hs_post(token, "/crm/v3/objects/contacts/search", json=payload)
+    try:
+        data = hs_post(token, "/crm/v3/objects/contacts/search", json=payload)
+    except Exception:
+        return []
     results = data.get("results", []) or []
 
     seen = set()
@@ -277,10 +280,11 @@ def render_filter_builder(
             with cols[2]:
                 if field_def.kind == "enum":
                     if has_hist_dropdown:
+                        options_list = [lbl for (lbl, _val) in historie_options]
                         current_vals = _as_list_values(f.get("value"))
                         current_labels = [hist_value_to_label.get(v, v) for v in current_vals]
-                        picked_labels = st.multiselect("Wert", options=[lbl for (lbl, _val) in historie_options],
-                                                       default=[x for x in current_labels if x],
+                        picked_labels = st.multiselect("Wert", options=options_list,
+                                                       default=[x for x in current_labels if x in options_list],
                                                        key=f"val_enum_{fid}", label_visibility="collapsed",
                                                        placeholder="Historie auswählen…")
                         f["value"] = [label_to_hist_value.get(lbl, lbl) for lbl in picked_labels]

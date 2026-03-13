@@ -12,41 +12,46 @@ ALLOWED_CATEGORIES = [K_TN, K_VIP, K_SPO, K_BEO, K_TEAM]
 def derive_kategorie_from_historie(historie: str | None, event_tag: str) -> Optional[str]:
     if not historie:
         return None
+    if not event_tag:
+        return None
+
+    h = historie.upper()
+    tag = event_tag.upper()
 
     # VIP/REF
-    if f"{event_tag}_REF" in historie:
+    if f"{tag}_REF" in h:
         return K_VIP
-    if f"{event_tag}_REF_Selfmades" in historie:
+    if f"{tag}_REF_SELFMADES" in h:
         return K_VIP
-    if f"{event_tag}_TN_Selfmades" in historie:
+    if f"{tag}_TN_SELFMADES" in h:
         return K_VIP
-    if f"{event_tag}_SELFMADE" in historie:
+    if f"{tag}_SELFMADE" in h:
         return K_VIP
-    if f"{event_tag}_REF_Saveplayer" in historie:
+    if f"{tag}_REF_SAVEPLAYER" in h:
         return K_VIP
 
     # Sponsor
-    if f"{event_tag}_SPO" in historie:
+    if f"{tag}_SPO_VORORT" in h:
         return K_SPO
-    if f"{event_tag}_SPO_VORORT" in historie:
+    if f"{tag}_SPO" in h:
         return K_SPO
 
     # BEO
-    if f"{event_tag}_BEO" in historie:
+    if f"{tag}_BEO" in h:
         return K_BEO
 
     # TN
-    if f"{event_tag}_TN" in historie:
+    if f"{tag}_TNNOREPLY" in h:
         return K_TN
-    if f"{event_tag}_TNNOREPLY" in historie:
+    if f"{tag}_TNNOMEETINGS" in h:
         return K_TN
-    if f"{event_tag}_TNNOMEETINGS" in historie:
+    if f"{tag}_TN_SAVEPLAYER" in h:
         return K_TN
-    if f"{event_tag}_TN_Saveplayer" in historie:
+    if f"{tag}_TN" in h:
         return K_TN
 
     # Team
-    if f"{event_tag}_Team" in historie:
+    if f"{tag}_TEAM" in h:
         return K_TEAM
 
     return None

@@ -123,12 +123,17 @@ selected_name = st.selectbox(
 if selected_name is None:
     st.stop()
 
+if selected_name not in lists_map:
+    st.warning("Das gewählte Segment ist nicht mehr verfügbar. Bitte die Seite neu laden.")
+    st.stop()
+
 list_id = lists_map[selected_name]
 st.caption(f"List ID: {list_id}")
 
 # --- Dateiname ---
-_safe_name = "".join(c if c not in r'\/:*?"<>|' else "_" for c in selected_name)
+_safe_name = "".join(c if c not in r"""\/:*?'"<>|""" else "_" for c in selected_name)
 pdf_filename = f"{_safe_name}_Teilnehmerliste_{lang}.pdf"
+_pdf_filename_js = pdf_filename.replace("'", "\\'").replace("\\", "\\\\")
 
 # --- Verschlüsselung ---
 encrypt = st.checkbox("PDF verschlüsseln")
@@ -171,8 +176,16 @@ if not st.session_state.pdf_ready:
 
         df_raw = pd.DataFrame([c.get("properties", {}) for c in contacts])
 
+        if df_raw.empty:
+            st.warning("Keine Kontakteigenschaften erhalten.")
+            st.stop()
+
         with st.spinner("Regeln anwenden..."):
             df_out = build_teilnehmerliste(df_raw, lang=lang)
+
+        if df_out.empty:
+            st.warning("Keine Einträge nach Transformation – möglicherweise sind alle Firmenfelder leer.")
+            st.stop()
 
         with st.spinner("PDF rendern..."):
             pdf_bytes = generate_pdf_bytes(
@@ -230,11 +243,11 @@ if not st.session_state.pdf_ready:
                 var url = URL.createObjectURL(blob);
                 var a = window.parent.document.createElement('a');
                 a.href = url;
-                a.download = '{pdf_filename}';
+                a.download = '{_pdf_filename_js}';
                 window.parent.document.body.appendChild(a);
                 a.click();
                 window.parent.document.body.removeChild(a);
-                setTimeout(function() {{ URL.revokeObjectURL(url); }}, 100);
+                setTimeout(function() {{ URL.revokeObjectURL(url); }}, 2000);
               }})();
             </script>""",
             height=0,

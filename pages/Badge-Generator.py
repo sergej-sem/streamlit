@@ -292,7 +292,10 @@ st.subheader("3) PDF erzeugen")
 cats_present = sorted([c for c in df["kategorie"].dropna().unique().tolist() if str(c).strip()])
 selected = st.multiselect("Kategorien auswählen", options=cats_present, default=cats_present)
 
-df_out = df[df["kategorie"].isin(selected)] if selected else df
+if not selected:
+    st.info("Bitte mindestens eine Kategorie auswählen.")
+    st.stop()
+df_out = df[df["kategorie"].isin(selected)]
 if df_out.empty:
     st.warning("Keine Kontakte in den ausgewählten Kategorien.")
     st.stop()
@@ -315,13 +318,17 @@ if st.session_state.get("badges_pdf_sig") != current_sig:
     st.session_state["badges_pdf_downloaded"] = False
 
 with st.spinner("PDF wird vorbereitet …"):
-    pdf_bytes = _build_pdf_cached(
-        df_out=df_out,
-        tpl_map=tpl_map,
-        uppercase_names=uppercase_names,
-        uppercase_company=uppercase_company,
-        print_record_id=print_record_id,
-    )
+    try:
+        pdf_bytes = _build_pdf_cached(
+            df_out=df_out,
+            tpl_map=tpl_map,
+            uppercase_names=uppercase_names,
+            uppercase_company=uppercase_company,
+            print_record_id=print_record_id,
+        )
+    except Exception as e:
+        st.error(f"❌ PDF-Erstellung fehlgeschlagen: {e}")
+        st.stop()
 
 
 def _mark_downloaded() -> None:

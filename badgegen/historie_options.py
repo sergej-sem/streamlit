@@ -2,10 +2,10 @@
 from typing import List, Tuple
 import requests
 
+from badgegen.hubspot_search import HubSpotAPIError
+
 HUBSPOT_BASE = "https://api.hubapi.com"
 
-class HubSpotAPIError(RuntimeError):
-    pass
 
 def hs_get(token: str, path: str) -> dict:
     r = requests.get(
@@ -14,7 +14,7 @@ def hs_get(token: str, path: str) -> dict:
         timeout=30,
     )
     if r.status_code >= 400:
-        raise HubSpotAPIError(f"HubSpot GET {path} failed: {r.status_code} {r.text[:800]}")
+        raise HubSpotAPIError(r.status_code, f"HubSpot GET {path} failed: {r.status_code} {r.text[:800]}")
     return r.json()
 
 def fetch_historie_options(token: str, historie_property: str = "historie") -> List[Tuple[str, str]]:

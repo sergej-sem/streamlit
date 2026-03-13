@@ -63,7 +63,7 @@ def _search_contacts_paged(
         batch = data.get("results", []) or []
         out.extend(batch)
 
-        after = data.get("paging", {}).get("next", {}).get("after")
+        after = (data.get("paging") or {}).get("next", {}).get("after")
         if not after or not batch:
             break
 
