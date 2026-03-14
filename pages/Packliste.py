@@ -102,6 +102,42 @@ _log = logging.getLogger("packliste")
 
 # ── Constants ──────────────────────────────────────────────────────────────────
 
+_ERROR_TOAST_CSS = """<style>
+div[data-testid="stToast"] {
+    background-color: #F1C40F !important;
+    border: none !important;
+}
+div[data-testid="stToast"] p,
+div[data-testid="stToast"] span,
+div[data-testid="stToast"] div {
+    color: #000000 !important;
+}
+</style>"""
+
+_CRITICAL_TOAST_CSS = """<style>
+div[data-testid="stToast"] {
+    background-color: #C0392B !important;
+    border: none !important;
+}
+div[data-testid="stToast"] p,
+div[data-testid="stToast"] span,
+div[data-testid="stToast"] div {
+    color: white !important;
+}
+</style>"""
+
+_SUCCESS_TOAST_CSS = """<style>
+div[data-testid="stToast"] {
+    background-color: #27AE60 !important;
+    border: none !important;
+}
+div[data-testid="stToast"] p,
+div[data-testid="stToast"] span,
+div[data-testid="stToast"] div {
+    color: white !important;
+}
+</style>"""
+
 SHEET_NAME        = "Packliste"
 HEADER_ROW_IDX    = 2
 DATA_START_XL_ROW = 4
@@ -123,12 +159,33 @@ REQUIRED_COLS = [
 # Persists last-active Excel path across browser refreshes
 _META_FILE = Path(__file__).parent / ".packliste_meta.json"
 
-# ── Thread-shared state ────────────────────────────────────────────────────────
+# ── Thread-shared state (persisted via cache_resource across reruns) ──────────
+#
+# Streamlit re-executes the entire script on every rerun.  A plain module-level
+# assignment like `_excel_result = {...}` would therefore RESET the dict to
+# {"status": "ok"} on every rerun — the background thread's "error" result
+# would be lost immediately and the save button would always show "Gespeichert".
+# The same reset would zero out _save_gen, causing the gen-check inside the
+# worker to fail (thread gen ≠ 0) and skip the write entirely.
+#
+# st.cache_resource returns the SAME object on every rerun, so the background
+# thread and the current script run always share the identical dict / list /
+# Lock instances.
 
-_save_lock     = threading.Lock()
-_save_gen_lock = threading.Lock()
-_save_gen      = [0]                              # current generation counter
-_excel_result  = {"status": "ok", "error": None}  # bg thread → main thread
+@st.cache_resource
+def _get_thread_state() -> dict:
+    return {
+        "save_lock":     threading.Lock(),
+        "save_gen_lock": threading.Lock(),
+        "save_gen":      [0],
+        "excel_result":  {"status": "ok", "error": None},
+    }
+
+_ts            = _get_thread_state()
+_save_lock     = _ts["save_lock"]
+_save_gen_lock = _ts["save_gen_lock"]
+_save_gen      = _ts["save_gen"]
+_excel_result  = _ts["excel_result"]
 
 
 # ── Meta-file helpers (last-active path) ──────────────────────────────────────
@@ -534,40 +591,59 @@ elif _excel_result["status"] == "ok":
     st.session_state.pop("pl_excel_err", None)
 
 hist_len = len(st.session_state.get("pl_history", []))
-title_col, status_col, undo_col = st.columns([5, 3, 1])
+title_col, btn_col = st.columns([7, 2])
 
 with title_col:
     st.title("Packliste")
 
-with status_col:
+with btn_col:
     st.write("")
-    if st.session_state.get("pl_sidecar_err"):
-        st.error(f"⚠️ Autosave-Fehler: {st.session_state['pl_sidecar_err']}")
-    elif st.session_state.get("pl_excel_err"):
-        st.warning(
-            f"⚠️ Excel nicht aktualisiert (Daten in Autosave gesichert): "
-            f"{st.session_state['pl_excel_err']}"
-        )
-    elif _excel_result["status"] == "saving":
-        st.caption("⏳ Wird gespeichert…")
-    else:
-        st.caption("✅ Gespeichert")
-    if msg := st.session_state.pop("_al_msg", None):
-        st.info(msg)
-    if err := st.session_state.pop("_al_err", None):
-        st.error(f"Fehler beim Auto-Laden: {err}")
-
-with undo_col:
-    st.write("")
-    if st.session_state["pl_df"] is not None:
-        undo_label = f"↩ Rückgängig ({hist_len})" if hist_len else "↩ Rückgängig"
+    save_col, undo_col = st.columns(2)
+    with save_col:
+        if st.button("💾", use_container_width=True, key="save_status_btn",
+                     help="Speichern"):
+            # Neuen Speicherversuch starten (Retry), damit ein zuvor fehlgeschlagener
+            # Save nach Schließen der Excel-Datei erneut versucht wird.
+            if st.session_state.get("pl_df") is not None:
+                _auto_save()
+            time.sleep(1.8)   # warten bis Hintergrund-Thread Schreibversuch abgeschlossen hat
+            # _excel_result direkt lesen (nach sleep aktuell vom Thread befüllt)
+            if st.session_state.get("pl_sidecar_err"):
+                st.markdown(_CRITICAL_TOAST_CSS, unsafe_allow_html=True)
+                st.toast("Autosave-Fehler!")
+            elif _excel_result["status"] == "error":
+                st.session_state["pl_excel_err"] = _excel_result["error"]
+                st.markdown(_ERROR_TOAST_CSS, unsafe_allow_html=True)
+                st.toast("Excel nicht aktualisiert – Excel-Datei schließen und erneut speichern")
+            elif _excel_result["status"] == "saving":
+                st.toast("⏳ Speichern läuft noch…")
+            else:
+                st.session_state.pop("pl_excel_err", None)
+                st.markdown(_SUCCESS_TOAST_CSS, unsafe_allow_html=True)
+                st.toast("Gespeichert")
+    with undo_col:
+        undo_label = "↩"
         if st.button(undo_label, disabled=(hist_len == 0),
-                     use_container_width=True, key="undo_btn"):
+                     use_container_width=True, key="undo_btn",
+                     help="Letzte Änderung rückgängig machen"):
             prev = st.session_state["pl_history"].pop()
             st.session_state["pl_df"]      = prev
             st.session_state["pl_version"] += 1
             _auto_save()
-            st.rerun()   # full-app rerun intentional: resets all tab views
+            st.rerun()
+
+# Fehler-Meldungen unterhalb des Headers, volle Breite
+if st.session_state.get("pl_sidecar_err"):
+    st.error(f"⚠️ Autosave-Fehler: {st.session_state['pl_sidecar_err']}")
+elif st.session_state.get("pl_excel_err"):
+    st.warning(
+        f"⚠️ Excel nicht aktualisiert (Daten in Autosave gesichert): "
+        f"{st.session_state['pl_excel_err']}"
+    )
+if msg := st.session_state.pop("_al_msg", None):
+    st.info(msg)
+if err := st.session_state.pop("_al_err", None):
+    st.error(f"Fehler beim Auto-Laden: {err}")
 
 
 # ── File loader ────────────────────────────────────────────────────────────────
@@ -811,27 +887,23 @@ def _frag_uebersicht() -> None:
             .astype(int)
             .reset_index()
         )
-        bd["Offen"]       = bd["Gesamt"] - bd["Verpackt"]
         bd["Fortschritt"] = (
-            (bd["Verpackt"] / bd["Gesamt"].clip(lower=1) * 100)
-            .round(0).astype(int).astype(str) + " %"
-        )
-        st.dataframe(bd, hide_index=True, use_container_width=True)
-
-    # ── Verladen nach Bereich + Kategorie ─────────────────────────────────────
-    if all(c in df.columns for c in ("Bereich", "Kategorie", "Verladen")):
-        st.subheader("Verladen nach Bereich + Kategorie")
-        verl_view = (
-            df.groupby(["Bereich", "Kategorie"], sort=True)["Verladen"]
-            .first()
-            .reset_index()
-        )
+            bd["Verpackt"] / bd["Gesamt"].clip(lower=1) * 100
+        ).round(1)
         st.dataframe(
-            verl_view,
+            bd,
             hide_index=True,
             use_container_width=True,
-            column_config={"Verladen": _cc_check("Verladen")},
+            column_config={
+                "Bereich":      st.column_config.TextColumn("Bereich"),
+                "Verpackt":     st.column_config.NumberColumn("Verpackt", format="%d"),
+                "Gesamt":       st.column_config.NumberColumn("Gesamt",   format="%d"),
+                "Fortschritt":  st.column_config.ProgressColumn(
+                    "Fortschritt", min_value=0, max_value=100, format="%.0f %%"
+                ),
+            },
         )
+
 
 
 # ── Render ─────────────────────────────────────────────────────────────────────
