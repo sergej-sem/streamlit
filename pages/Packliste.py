@@ -8,28 +8,47 @@ Architecture (optimised for fluid checkbox UX)
 ───────────────────────────────────────────────
   • Checkbox click  → @st.fragment reruns (fast, ~50-100 ms)
                     → NO full-app rerun triggered per click
+                    → NO widget remount, NO scroll reset
   • on_change callback fires BEFORE the fragment body re-executes:
       _sync_edits / _sync_verladen
         → pl_df updated
-        → pl_version incremented          ← forces fresh frozen-base
         → _auto_save()  (sidecar sync + async Excel)
-  • Fragment body runs with new pl_version:
-      → _get_frozen_base builds base from CURRENT pl_df
-      → editor = pl_df directly  (empty edited_rows on fresh widget)
-      → visually always correct after one fragment rerun
+        → pl_version NOT bumped  ← key stays stable, widget stays alive
+  • Fragment body runs with the SAME pl_version:
+      → SAME key → SAME widget instance → SAME frozen_base
+      → edited_rows preserved intact by Streamlit
+      → visual = frozen_base + edited_rows = pl_df  ✓
 
 State layers
 ────────────
   pl_df         sole authoritative truth; only _sync_edits/_sync_verladen write here
-  frozen_base   view-basis for st.data_editor; rebuilt from pl_df on every version bump
-  edited_rows   Streamlit's in-flight delta; starts {} each new version (fresh widget)
-  pl_version    commit counter; increment = new key = fresh frozen_base from pl_df
+  frozen_base   stable view-basis for st.data_editor; NEVER modified between
+                undo/load events; created once per (tab, session/version)
+  edited_rows   Streamlit's in-flight delta from frozen_base; accumulates across
+                all clicks on the same widget instance; never discarded as long as
+                the base and key stay the same
+  pl_version    bumped ONLY on undo and file-load (intentional full rebuilds)
 
-Why no full-app rerun per click:
-  Each commit bumps pl_version.  The fragment itself builds a new frozen_base
-  from current pl_df on its next run.  The editor shows pl_df directly — no
-  stale delta, no race with queued browser events.  Global metrics live in the
-  separate "Übersicht" tab, decoupled from the fast click path.
+Why the visual stays correct without per-click version bumps:
+  The editor renders frozen_base + edited_rows.  After each commit:
+    frozen_base[row] = initial value (unchanged)
+    edited_rows[row] = user's latest value
+    → visual = user's latest value = pl_df value  ✓
+  As long as the key and base are stable, Streamlit preserves edited_rows
+  across fragment reruns, so every accumulated click remains visible.
+  There is no race condition because there is no full-app rerun per click —
+  the only scenario where edited_rows could be lost by Streamlit is when the
+  base DataFrame changes or a new key is used, neither of which happens here.
+
+Why this did NOT regress the old "UI empty, model correct" bug:
+  That bug required a full-app rerun (which could reset edited_rows via a
+  stale browser delta).  With no full-app rerun per click, that race cannot
+  occur.  On browser-refresh the sidecar is loaded, pl_version resets to 1,
+  and a fresh frozen_base is built from the restored pl_df — both start from
+  the same committed state, so the visual is immediately correct.
+
+Global metrics live in the separate "Übersicht" tab, decoupled from the
+fast click path.
 
 Persistence (two-stage save)
 ─────────────────────────────
@@ -337,17 +356,20 @@ def _auto_save() -> None:
 
 # ── Frozen-base / edit-sync helpers ───────────────────────────────────────────
 #
-# Frozen-base invariant (within one pl_version):
+# Frozen-base invariant:
 #   The DataFrame passed to st.data_editor is NEVER modified after creation.
 #   Streamlit accumulates edited_rows as a delta on the base it last received.
-#   If the base changes, Streamlit treats it as a data-reset and discards all
-#   accumulated edited_rows — including the user's latest click.
+#   If the base changes between renders, Streamlit discards all accumulated
+#   edited_rows — causing the "second click disappears" bug.  Keeping the
+#   base frozen (and the widget key stable) prevents any such reset.
 #
-# Cross-version safety (pl_version bumps):
-#   Each commit bumps pl_version.  The next fragment run uses a NEW key →
-#   _get_frozen_base creates a FRESH base from current pl_df.  edited_rows
-#   starts at {} on the fresh widget.  The editor shows pl_df directly,
-#   with zero dependence on accumulated delta.  No full-app rerun needed.
+# Why we do NOT bump pl_version on every commit:
+#   A version bump → new key → Streamlit mounts a NEW widget → DOM remount
+#   → scroll position lost → visible table flicker on every click.
+#   Instead the same widget instance is reused across all clicks.
+#   The visual stays correct because edited_rows accumulates the full delta
+#   from the frozen_base and is never discarded (stable key + stable base).
+#   pl_version is bumped ONLY on intentional full-rebuilds (undo, file-load).
 
 def _get_frozen_base(key: str, initial: pd.DataFrame) -> pd.DataFrame:
     """
@@ -373,7 +395,8 @@ def _get_frozen_base(key: str, initial: pd.DataFrame) -> pd.DataFrame:
 def _sync_edits(editor_key: str, frozen_base: pd.DataFrame) -> None:
     """
     Apply new differences from edited_rows into pl_df.
-    Bumps pl_version on any real change → next fragment run gets fresh base.
+    pl_version is NOT bumped — the same widget key and frozen_base are reused
+    on the next fragment run so the editor stays alive without a remount.
     """
     state = st.session_state.get(editor_key)
     if not isinstance(state, dict):
@@ -403,11 +426,9 @@ def _sync_edits(editor_key: str, frozen_base: pd.DataFrame) -> None:
                 changed_cells.append((df_idx, col, old_val, new_val))
 
     if history_pushed:
-        old_ver = st.session_state["pl_version"]
-        st.session_state["pl_version"] += 1
         _log.info(
-            "Commit %s: ver %d→%d, cells=%s",
-            editor_key, old_ver, st.session_state["pl_version"],
+            "Commit %s: ver=%d, cells=%s",
+            editor_key, st.session_state["pl_version"],
             [(idx, c, f"{ov!r}→{nv!r}") for idx, c, ov, nv in changed_cells],
         )
         _auto_save()
@@ -415,8 +436,8 @@ def _sync_edits(editor_key: str, frozen_base: pd.DataFrame) -> None:
 
 def _sync_verladen(editor_key: str, frozen_base: pd.DataFrame) -> None:
     """
-    Like _sync_edits but propagates Verladen to every row sharing
-    the same Bereich + Kategorie.  Bumps pl_version on any real change.
+    Like _sync_edits but propagates Verladen to every row sharing the same
+    Bereich + Kategorie.  pl_version is NOT bumped — widget stays alive.
     """
     state = st.session_state.get(editor_key)
     if not isinstance(state, dict):
@@ -445,11 +466,9 @@ def _sync_verladen(editor_key: str, frozen_base: pd.DataFrame) -> None:
             changed_groups.append((bereich, kategorie, new_val))
 
     if history_pushed:
-        old_ver = st.session_state["pl_version"]
-        st.session_state["pl_version"] += 1
         _log.info(
-            "Commit %s: ver %d→%d, verladen groups=%s",
-            editor_key, old_ver, st.session_state["pl_version"],
+            "Commit %s: ver=%d, verladen groups=%s",
+            editor_key, st.session_state["pl_version"],
             [(b, k, nv) for b, k, nv in changed_groups],
         )
         _auto_save()
@@ -463,13 +482,13 @@ def _make_callback(editor_key: str, frozen_base: pd.DataFrame,
     Returns an on_change callback for a data_editor.
 
     Streamlit calls this callback BEFORE the fragment body re-executes.
-    pl_version is bumped inside _sync_edits/_sync_verladen, so when the
-    fragment body runs it immediately sees the new version → fresh frozen_base
-    from pl_df → correct visual state in ONE fragment rerun, NO st.rerun().
+    The callback commits changes to pl_df and triggers autosave.
+    pl_version is NOT bumped → same key → same widget instance is reused →
+    no remount, no scroll reset.
 
-    The frozen_base reference is captured at creation time; since it is never
-    modified (frozen-base invariant), it remains valid for the life of the
-    closure even after the corresponding session_state key is evicted.
+    The frozen_base reference is captured at creation time.  Since it is
+    never modified (frozen-base invariant), it stays valid for all future
+    invocations of this callback.
     """
     def _cb() -> None:
         if verladen:
