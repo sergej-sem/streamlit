@@ -490,6 +490,9 @@ def _sync_edits(editor_key: str, frozen_base: pd.DataFrame) -> None:
             [(idx, c, f"{ov!r}→{nv!r}") for idx, c, ov, nv in changed_cells],
         )
         _auto_save()
+        # Kein st.rerun() hier — on_change-Callbacks ignorieren Rerun (No-Op).
+        # Fragment ruft _flush_full_rerun_after_editor_commit() auf.
+        st.session_state["_pl_rerun_after_commit"] = True
 
 
 def _sync_verladen(editor_key: str, frozen_base: pd.DataFrame) -> None:
@@ -530,6 +533,13 @@ def _sync_verladen(editor_key: str, frozen_base: pd.DataFrame) -> None:
             [(b, k, nv) for b, k, nv in changed_groups],
         )
         _auto_save()
+        st.session_state["_pl_rerun_after_commit"] = True
+
+
+def _flush_full_rerun_after_editor_commit() -> None:
+    """Nach Editor-Commit: voller Rerun, damit Header (Undo) pl_history sieht."""
+    if st.session_state.pop("_pl_rerun_after_commit", False):
+        st.rerun()
 
 
 # ── Callback factory ───────────────────────────────────────────────────────────
@@ -725,12 +735,12 @@ tab_pack, tab_verl, tab_ers, tab_ueb, tab_def = st.tabs(
 # ── Fragments ──────────────────────────────────────────────────────────────────
 # Each fragment is self-contained: it reads pl_df, builds its frozen_base,
 # renders its editor(s), and registers its on_change callback.
-# No st.rerun() or _check_rerun() is called after checkbox clicks.
-# The pl_version bump inside the callback is the only mechanism needed to
-# ensure the next fragment run shows the correct, up-to-date visual state.
+# Nach Commit setzen _sync_* ein Flag; Fragment startet mit
+# _flush_full_rerun_after_editor_commit() (Rerun nur außerhalb Callback).
 
 @st.fragment
 def _frag_packen() -> None:
+    _flush_full_rerun_after_editor_commit()
     ver  = st.session_state["pl_version"]
     df   = st.session_state["pl_df"]
     pcfg = {
@@ -805,6 +815,7 @@ def _frag_packen() -> None:
 
 @st.fragment
 def _frag_verladen() -> None:
+    _flush_full_rerun_after_editor_commit()
     ver   = st.session_state["pl_version"]
     df    = st.session_state["pl_df"]
     bk_v   = f"b_verl_{ver}"
@@ -827,6 +838,7 @@ def _frag_verladen() -> None:
 
 @st.fragment
 def _frag_ersetzen() -> None:
+    _flush_full_rerun_after_editor_commit()
     ver      = st.session_state["pl_version"]
     df       = st.session_state["pl_df"]
     st.subheader("Gebrauchsgegenstände")
@@ -855,6 +867,7 @@ def _frag_ersetzen() -> None:
 
 @st.fragment
 def _frag_definitionen() -> None:
+    _flush_full_rerun_after_editor_commit()
     ver  = st.session_state["pl_version"]
     df   = st.session_state["pl_df"]
     cols = ["Gegenstand", "Beschreibung", "Bereich"]
