@@ -337,8 +337,8 @@ def save_df(df: pd.DataFrame, path: str) -> None:
 
 # ── Column-config shortcuts ────────────────────────────────────────────────────
 
-def _cc_text(label: str)  -> st.column_config.TextColumn:
-    return st.column_config.TextColumn(label)
+def _cc_text(label: str, width: str = "medium") -> st.column_config.TextColumn:
+    return st.column_config.TextColumn(label, width=width)
 
 def _cc_check(label: str) -> st.column_config.CheckboxColumn:
     return st.column_config.CheckboxColumn(label)
@@ -347,6 +347,7 @@ def _cc_check(label: str) -> st.column_config.CheckboxColumn:
 # ── History ────────────────────────────────────────────────────────────────────
 
 def _push_history() -> None:
+    st.session_state["pl_redo_stack"] = []
     hist: list = st.session_state.setdefault("pl_history", [])
     hist.append(st.session_state["pl_df"].copy())
     if len(hist) > MAX_HISTORY:
@@ -558,7 +559,7 @@ def _make_callback(editor_key: str, frozen_base: pd.DataFrame,
 # ── Session-state init ─────────────────────────────────────────────────────────
 
 for _k, _v in [("pl_df", None), ("pl_path", DEFAULT_PATH),
-               ("pl_version", 0), ("pl_history", [])]:
+               ("pl_version", 0), ("pl_history", []), ("pl_redo_stack", [])]:
     if _k not in st.session_state:
         st.session_state[_k] = _v
 
@@ -590,15 +591,24 @@ if _excel_result["status"] == "error":
 elif _excel_result["status"] == "ok":
     st.session_state.pop("pl_excel_err", None)
 
+st.markdown(
+    "<style>div.block-container{padding-top:2.2rem}</style>",
+    unsafe_allow_html=True,
+)
+
 hist_len = len(st.session_state.get("pl_history", []))
+redo_len = len(st.session_state.get("pl_redo_stack", []))
 title_col, btn_col = st.columns([7, 2])
 
 with title_col:
-    st.title("Packliste")
+    st.markdown(
+        "<div style='font-size:1.35rem;font-weight:700;margin:1.1rem 0 0.6rem 0'>Packliste</div>",
+        unsafe_allow_html=True,
+    )
 
 with btn_col:
-    st.write("")
-    save_col, undo_col = st.columns(2)
+    st.markdown("<div style='margin-top:1.1rem'></div>", unsafe_allow_html=True)
+    save_col, undo_col, redo_col = st.columns(3)
     with save_col:
         if st.button("💾", use_container_width=True, key="save_status_btn",
                      help="Speichern"):
@@ -626,8 +636,24 @@ with btn_col:
         if st.button(undo_label, disabled=(hist_len == 0),
                      use_container_width=True, key="undo_btn",
                      help="Letzte Änderung rückgängig machen"):
+            redo = st.session_state.setdefault("pl_redo_stack", [])
+            redo.append(st.session_state["pl_df"].copy())
+            if len(redo) > MAX_HISTORY:
+                redo.pop(0)
             prev = st.session_state["pl_history"].pop()
             st.session_state["pl_df"]      = prev
+            st.session_state["pl_version"] += 1
+            _auto_save()
+            st.rerun()
+    with redo_col:
+        if st.button("↪", disabled=(redo_len == 0),
+                     use_container_width=True, key="redo_btn",
+                     help="Wiederherstellen"):
+            hist = st.session_state.setdefault("pl_history", [])
+            hist.append(st.session_state["pl_df"].copy())
+            if len(hist) > MAX_HISTORY:
+                hist.pop(0)
+            st.session_state["pl_df"] = st.session_state["pl_redo_stack"].pop()
             st.session_state["pl_version"] += 1
             _auto_save()
             st.rerun()
@@ -666,12 +692,26 @@ with st.expander(
             st.session_state["pl_path"]    = path_input
             st.session_state["pl_version"] += 1
             st.session_state["pl_history"] = []
+            st.session_state["pl_redo_stack"] = []
             st.rerun()   # full-app rerun intentional: resets all tab views
         except Exception as exc:
             st.error(f"Fehler beim Laden:\n{exc}")
 
 if st.session_state["pl_df"] is None:
     st.stop()
+
+# Achtung, wenn Gebrauchsgegenstände (Ersetzen) Notizen haben
+df = st.session_state["pl_df"]
+if "Nachfüllen" in df.columns and "Notizen" in df.columns:
+    ers_df = df.loc[~df["Nachfüllen"].astype(bool), "Notizen"]
+    hat_notizen = ers_df.apply(
+        lambda v: bool(pd.notna(v) and str(v).strip())
+    ).any()
+    if hat_notizen:
+        st.warning(
+            "⚠️ Achtung: Es gibt offene Notizen bei den Gebrauchsgegenständen "
+            "(Tab Ersetzen)."
+        )
 
 st.divider()
 
@@ -694,10 +734,10 @@ def _frag_packen() -> None:
     ver  = st.session_state["pl_version"]
     df   = st.session_state["pl_df"]
     pcfg = {
-        "Bereich":    _cc_text("Bereich"),
-        "Gegenstand": _cc_text("Gegenstand"),
-        "Menge":      _cc_text("Menge"),
-        "Kategorie":  _cc_text("Kategorie"),
+        "Bereich":    _cc_text("Bereich",    width="small"),
+        "Gegenstand": _cc_text("Gegenstand", width="medium"),
+        "Menge":      _cc_text("Menge",      width="small"),
+        "Kategorie":  _cc_text("Kategorie",  width="small"),
         "Verpackt":   _cc_check("Verpackt"),
     }
 
@@ -723,7 +763,7 @@ def _frag_packen() -> None:
     st.divider()
 
     # ── Jetzt packen ──────────────────────────────────────────────────────────
-    st.subheader("Jetzt packen")
+    st.subheader("Jetzt packen – Verbrauchsgegenstände")
     cn     = ["Bereich", "Gegenstand", "Menge", "Kategorie", "Verpackt"]
     bk_n   = f"b_nach_{ver}"
     base_n = _get_frozen_base(
@@ -767,10 +807,6 @@ def _frag_packen() -> None:
 def _frag_verladen() -> None:
     ver   = st.session_state["pl_version"]
     df    = st.session_state["pl_df"]
-    st.caption(
-        "Eindeutige Bereich + Kategorie-Kombinationen. "
-        "Verladen-Haken gilt für alle Positionen dieser Kombination."
-    )
     bk_v   = f"b_verl_{ver}"
     base_v = _get_frozen_base(
         bk_v,
@@ -782,8 +818,8 @@ def _frag_verladen() -> None:
         hide_index=True, num_rows="fixed",
         on_change=_make_callback(ek_v, base_v, verladen=True),
         column_config={
-            "Bereich":   _cc_text("Bereich"),
-            "Kategorie": _cc_text("Kategorie"),
+            "Bereich":   _cc_text("Bereich",   width="small"),
+            "Kategorie": _cc_text("Kategorie", width="small"),
             "Verladen":  _cc_check("Verladen"),
         },
     )
@@ -793,7 +829,8 @@ def _frag_verladen() -> None:
 def _frag_ersetzen() -> None:
     ver      = st.session_state["pl_version"]
     df       = st.session_state["pl_df"]
-    st.caption("Positionen, bei denen Nachfüllen NICHT angekreuzt ist. Notizen bearbeitbar.")
+    st.subheader("Gebrauchsgegenstände")
+    st.caption("In die Notizen das Problem reinschreiben.")
     cols_e   = ["Bereich", "Gegenstand", "Notizen"]
     bk_ers   = f"b_ers_{ver}"
     base_ers = _get_frozen_base(
@@ -809,9 +846,9 @@ def _frag_ersetzen() -> None:
             hide_index=True, num_rows="fixed",
             on_change=_make_callback(ek_ers, base_ers),
             column_config={
-                "Bereich":    _cc_text("Bereich"),
-                "Gegenstand": _cc_text("Gegenstand"),
-                "Notizen":    _cc_text("Notizen"),
+                "Bereich":    _cc_text("Bereich",    width="small"),
+                "Gegenstand": _cc_text("Gegenstand", width="medium"),
+                "Notizen":    _cc_text("Notizen",    width="large"),
             },
         )
 
@@ -820,7 +857,6 @@ def _frag_ersetzen() -> None:
 def _frag_definitionen() -> None:
     ver  = st.session_state["pl_version"]
     df   = st.session_state["pl_df"]
-    st.caption("Stammdaten aller Positionen. Alle Felder bearbeitbar.")
     cols = ["Gegenstand", "Beschreibung", "Bereich"]
     bk   = f"b_def_{ver}"
     base = _get_frozen_base(bk, df[cols].sort_values("Bereich"))
@@ -830,9 +866,9 @@ def _frag_definitionen() -> None:
         hide_index=True, num_rows="fixed",
         on_change=_make_callback(ek, base),
         column_config={
-            "Gegenstand":   _cc_text("Gegenstand"),
-            "Beschreibung": _cc_text("Beschreibung"),
-            "Bereich":      _cc_text("Bereich"),
+            "Gegenstand":   _cc_text("Gegenstand",   width="medium"),
+            "Beschreibung": _cc_text("Beschreibung", width="large"),
+            "Bereich":      _cc_text("Bereich",      width="small"),
         },
     )
 

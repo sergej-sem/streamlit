@@ -74,7 +74,7 @@ def get_lists_map_autorefresh(ttl_seconds: int = LISTS_TTL_SECONDS) -> dict[str,
     return st.session_state["lists_map"]
 
 
-st.title("📄 Teilnehmerliste Generator")
+st.title("Teilnehmerliste Generator")
 st.caption("HubSpot Segment → Regeln → PDF")
 
 # --- Sprache ---
