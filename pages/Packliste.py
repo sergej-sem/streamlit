@@ -276,9 +276,42 @@ def restore_state_for_path(path: str):
 
 # ── Excel I/O ──────────────────────────────────────────────────────────────────
 
+def _detect_sheet_layout(ws) -> tuple[int, int, dict[str, int]]:
+    """Return header row index for pandas, first data row in Excel, and header map."""
+    for excel_row in range(1, min(ws.max_row, 12) + 1):
+        col_map = {
+            str(cell.value).strip(): cell.column
+            for cell in ws[excel_row]
+            if cell.value and str(cell.value).strip()
+        }
+        if all(col in col_map for col in REQUIRED_COLS):
+            data_start_row = excel_row + 1
+            for candidate_row in range(excel_row + 1, ws.max_row + 1):
+                has_data = any(
+                    ws.cell(candidate_row, xl_col).value not in (None, "")
+                    for xl_col in col_map.values()
+                )
+                if has_data:
+                    data_start_row = candidate_row
+                    break
+            return excel_row - 1, data_start_row, col_map
+
+    raise ValueError(
+        "Headerzeile im Sheet 'Packliste' nicht gefunden. "
+        "Bitte prÃ¼fen, ob die Pflichtspalten vorhanden sind."
+    )
+
+
 def load_df(path: str) -> pd.DataFrame:
+    wb = openpyxl.load_workbook(path, read_only=True, data_only=False)
+    try:
+        ws = wb[SHEET_NAME]
+        header_row_idx, _, _ = _detect_sheet_layout(ws)
+    finally:
+        wb.close()
+
     df = pd.read_excel(path, sheet_name=SHEET_NAME,
-                       header=HEADER_ROW_IDX, dtype=str)
+                       header=header_row_idx, dtype=str)
     df = df.where(df.notna() & (df != "nan"), "")
     missing = [c for c in REQUIRED_COLS if c not in df.columns]
     if missing:
@@ -307,18 +340,14 @@ def save_df(df: pd.DataFrame, path: str) -> None:
     try:
         wb   = openpyxl.load_workbook(path)
         ws   = wb[SHEET_NAME]
-        hrow = HEADER_ROW_IDX + 1
-        col_map = {
-            str(c.value).strip(): c.column
-            for c in ws[hrow]
-            if c.value and str(c.value).strip()
-        }
+        header_row_idx, data_start_row, col_map = _detect_sheet_layout(ws)
+        hrow = header_row_idx + 1
         if "Verladen" not in col_map:
             nxt = max(col_map.values()) + 1
             ws.cell(row=hrow, column=nxt, value="Verladen")
             col_map["Verladen"] = nxt
         for i, (_, row) in enumerate(df.iterrows()):
-            xl_row = DATA_START_XL_ROW + i
+            xl_row = data_start_row + i
             for col_name, xl_col in col_map.items():
                 if col_name not in df.columns:
                     continue
@@ -438,7 +467,166 @@ def _render_excel_download(
     )
 
 
+def _build_overview_stats(
+    df: pd.DataFrame,
+    *,
+    done_mask: pd.Series,
+    total_mask: pd.Series | None = None,
+    value_label: str,
+) -> pd.DataFrame:
+    if "Bereich" not in df.columns:
+        return pd.DataFrame(columns=["Bereich", value_label, "Gesamt", "Fortschritt"])
+
+    if total_mask is None:
+        total_mask = pd.Series(True, index=df.index)
+
+    base = df.loc[total_mask.astype(bool), ["Bereich"]].copy()
+    if base.empty:
+        return pd.DataFrame(columns=["Bereich", value_label, "Gesamt", "Fortschritt"])
+
+    base[value_label] = done_mask.loc[base.index].astype(bool).astype(int)
+    base["_row_count"] = 1
+    stats = (
+        base.groupby("Bereich", as_index=False)
+        .agg({value_label: "sum", "_row_count": "sum"})
+    )
+    stats = stats.rename(columns={"_row_count": "Gesamt"})
+    stats["Fortschritt"] = (
+        stats[value_label] / stats["Gesamt"].clip(lower=1) * 100
+    ).round(0).astype(int)
+
+    total_row = pd.DataFrame(
+        {
+            "Bereich": ["Gesamt"],
+            value_label: [int(base[value_label].sum())],
+            "Gesamt": [len(base)],
+        }
+    )
+    total_row["Fortschritt"] = (
+        total_row[value_label] / total_row["Gesamt"].clip(lower=1) * 100
+    ).round(0).astype(int)
+
+    return pd.concat([stats.sort_values("Bereich"), total_row], ignore_index=True)
+
+
+def _render_overview_stats_table(
+    title: str,
+    stats: pd.DataFrame,
+    *,
+    value_label: str,
+    row_color: str = "#3B82F6",
+    total_color: str = "#0F766E",
+    note: str | None = None,
+) -> None:
+    _render_overview_stats_df(title, stats, value_label=value_label, note=note)
+    return
+
+    st.subheader(title)
+    if note:
+        st.caption(note)
+    if stats.empty:
+        st.info("Keine Daten verfügbar.")
+        return
+
+    rows_html: list[str] = []
+    for _, row in stats.iterrows():
+        bereich = str(row["Bereich"])
+        value = int(row[value_label])
+        total = int(row["Gesamt"])
+        progress = max(0, min(int(row["Fortschritt"]), 100))
+        is_total = bereich == "Gesamt"
+        bar_color = total_color if is_total else row_color
+        weight = "700" if is_total else "500"
+        border_top = "border-top:2px solid #CBD5E1;" if is_total else ""
+
+        rows_html.append(
+            f"""
+            <tr style="font-weight:{weight};{border_top}">
+                <td>{html.escape(bereich)}</td>
+                <td style="text-align:right;">{value}</td>
+                <td style="text-align:right;">{total}</td>
+                <td>
+                    <div style="display:flex;align-items:center;gap:12px;">
+                        <div style="flex:1;height:10px;background:#E8EDF3;border-radius:999px;overflow:hidden;">
+                            <div style="width:{progress}%;height:100%;background:{bar_color};border-radius:999px;"></div>
+                        </div>
+                        <span style="min-width:46px;text-align:right;color:#475569;">{progress} %</span>
+                    </div>
+                </td>
+            </tr>
+            """
+        )
+
+    st.markdown(
+        f"""
+        <div class="ov-stats-card" style="border:1px solid #E5E7EB;border-radius:14px;overflow:hidden;margin-bottom:1rem;">
+            <table class="ov-stats-table" style="width:100%;border-collapse:collapse;font-size:0.98rem;">
+                <thead>
+                    <tr style="background:#F8FAFC;color:#64748B;">
+                        <th style="text-align:left;padding:12px 14px;border-bottom:1px solid #E5E7EB;">Bereich</th>
+                        <th style="text-align:right;padding:12px 14px;border-bottom:1px solid #E5E7EB;">{html.escape(value_label)}</th>
+                        <th style="text-align:right;padding:12px 14px;border-bottom:1px solid #E5E7EB;">Gesamt</th>
+                        <th style="text-align:left;padding:12px 14px;border-bottom:1px solid #E5E7EB;">Fortschritt</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {"".join(rows_html)}
+                </tbody>
+            </table>
+        </div>
+        <style>
+        .ov-stats-card .ov-stats-table td {{
+            padding: 12px 14px;
+            border-bottom: 1px solid #EEF2F7;
+            background: #FFFFFF;
+        }}
+        .ov-stats-card .ov-stats-table tbody tr:last-child td {{
+            border-bottom: none;
+        }}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 # ── History ────────────────────────────────────────────────────────────────────
+
+def _render_overview_stats_df(
+    title: str,
+    stats: pd.DataFrame,
+    *,
+    value_label: str,
+    note: str | None = None,
+) -> None:
+    st.subheader(title)
+    if note:
+        st.caption(note)
+    if stats.empty:
+        st.info("Keine Daten verfuegbar.")
+        return
+
+    view = stats.loc[:, ["Bereich", value_label, "Gesamt", "Fortschritt"]].copy()
+    view["Fortschritt"] = view["Fortschritt"].astype(int).clip(lower=0, upper=100)
+    progress_cfg = st.column_config.ProgressColumn(
+        "Fortschritt",
+        format="%d%%",
+        min_value=0,
+        max_value=100,
+    )
+    progress_cfg["alignment"] = "left"
+
+    st.dataframe(
+        view,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Bereich": st.column_config.TextColumn("Bereich", width="medium"),
+            value_label: _cc_number_left(value_label, fmt="%d"),
+            "Gesamt": _cc_number_left("Gesamt", fmt="%d"),
+            "Fortschritt": progress_cfg,
+        },
+    )
+
 
 def _push_history() -> None:
     st.session_state["pl_redo_stack"] = []
@@ -1049,47 +1237,75 @@ def _frag_uebersicht() -> None:
     st.divider()
 
     # ── Top metrics ───────────────────────────────────────────────────────────
-    m1, m2, m3, m4 = st.columns(4)
+    m1, m2, m3 = st.columns(3)
     total = len(df)
-    m1.metric("Positionen gesamt", total)
+    replace_col = next((col for col in df.columns if col.startswith("Nachf")), None)
     if "Verpackt" in df.columns:
         packed = int(df["Verpackt"].sum())
-        m2.metric("Verpackt", packed)
-        m3.metric("Fortschritt", f"{int(packed / max(total, 1) * 100)} %")
+        m1.metric("Verpackt", f"{packed} / {total}")
+    if "Notizen" in df.columns and replace_col is not None:
+        replace_total = int((~df[replace_col].astype(bool)).sum())
+        intact_count = int(
+            (
+                ~df["Notizen"].apply(lambda v: bool(pd.notna(v) and str(v).strip()))
+                & ~df[replace_col].astype(bool)
+            ).sum()
+        )
+        m2.metric("Intakt", f"{intact_count} / {replace_total}")
     if all(c in df.columns for c in ("Bereich", "Kategorie", "Verladen")):
         dedup      = df.drop_duplicates(["Bereich", "Kategorie"])
         verl_done  = int(dedup["Verladen"].sum())
         verl_total = len(dedup)
-        m4.metric("Verladen", f"{verl_done} / {verl_total} Kategorien")
+        m3.metric("Verladen", f"{verl_done} / {verl_total}")
 
     st.divider()
 
     # ── Verpackt nach Bereich ─────────────────────────────────────────────────
     if all(c in df.columns for c in ("Bereich", "Verpackt")):
-        st.subheader("Verpackt nach Bereich")
-        bd = (
-            df.groupby("Bereich")["Verpackt"]
-            .agg(["sum", "count"])
-            .rename(columns={"sum": "Verpackt", "count": "Gesamt"})
-            .astype(int)
-            .reset_index()
+        pack_stats = _build_overview_stats(
+            df,
+            done_mask=df["Verpackt"].astype(bool),
+            value_label="Verpackt",
         )
-        bd["Fortschritt"] = (
-            bd["Verpackt"] / bd["Gesamt"].clip(lower=1) * 100
-        ).round(1)
-        st.dataframe(
-            bd,
-            hide_index=True,
-            use_container_width=True,
-            column_config={
-                "Bereich":      st.column_config.TextColumn("Bereich"),
-                "Verpackt":     _cc_number_left("Verpackt", fmt="%d"),
-                "Gesamt":       _cc_number_left("Gesamt",   fmt="%d"),
-                "Fortschritt":  st.column_config.ProgressColumn(
-                    "Fortschritt", min_value=0, max_value=100, format="%.0f %%"
-                ),
-            },
+        _render_overview_stats_df(
+            "Packen",
+            pack_stats,
+            value_label="Verpackt",
         )
+
+    if all(c in df.columns for c in ("Bereich", "Kategorie", "Verladen")):
+        verl_df = df.drop_duplicates(["Bereich", "Kategorie"]).copy()
+        verl_stats = _build_overview_stats(
+            verl_df,
+            done_mask=verl_df["Verladen"].astype(bool),
+            value_label="Verladen",
+        )
+        _render_overview_stats_df(
+            "Verladen",
+            verl_stats,
+            value_label="Verladen",
+        )
+
+    replace_col = next((col for col in df.columns if col.startswith("Nachf")), None)
+    if all(c in df.columns for c in ("Bereich", "Notizen")) and replace_col is not None:
+        replace_total_mask = ~df[replace_col].astype(bool)
+        intact_mask = (
+            ~df["Notizen"].apply(lambda v: bool(pd.notna(v) and str(v).strip()))
+            & replace_total_mask
+        )
+        replace_stats = _build_overview_stats(
+            df,
+            done_mask=intact_mask,
+            total_mask=replace_total_mask,
+            value_label="Intakt",
+        )
+        _render_overview_stats_df(
+            "Ersetzen",
+            replace_stats,
+            value_label="Intakt",
+        )
+
+    return
 
 
 
