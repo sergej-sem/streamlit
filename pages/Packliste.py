@@ -84,11 +84,14 @@ import logging
 import pickle
 import threading
 import time
+from io import BytesIO
 from pathlib import Path
 
 import openpyxl
 import pandas as pd
 import streamlit as st
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+from openpyxl.utils import get_column_letter
 
 st.set_page_config(page_title="Packliste", layout="wide")
 
@@ -340,8 +343,99 @@ def save_df(df: pd.DataFrame, path: str) -> None:
 def _cc_text(label: str, width: str = "medium") -> st.column_config.TextColumn:
     return st.column_config.TextColumn(label, width=width)
 
+def _cc_number_left(label: str, width: str | None = None, fmt: str = "%d") -> dict:
+    cfg = st.column_config.NumberColumn(label, width=width, format=fmt)
+    cfg["alignment"] = "left"
+    return cfg
+
 def _cc_check(label: str) -> st.column_config.CheckboxColumn:
     return st.column_config.CheckboxColumn(label)
+
+
+def _to_excel_bytes(df: pd.DataFrame, sheet_name: str = "Liste") -> bytes:
+    data = BytesIO()
+    export_df = df.reset_index(drop=True).copy()
+    for col in CHECKBOX_COLS:
+        if col in export_df.columns:
+            export_df[col] = export_df[col].map(lambda v: "Ja" if bool(v) else "Nein")
+    with pd.ExcelWriter(data, engine="openpyxl") as writer:
+        export_df.to_excel(writer, index=False, sheet_name=sheet_name)
+        ws = writer.book[sheet_name]
+
+        header_fill = PatternFill("solid", fgColor="1F4E78")
+        header_font = Font(color="FFFFFF", bold=True)
+        header_alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        cell_alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
+        center_alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        border = Border(
+            left=Side(style="thin", color="D9E2F3"),
+            right=Side(style="thin", color="D9E2F3"),
+            top=Side(style="thin", color="D9E2F3"),
+            bottom=Side(style="thin", color="D9E2F3"),
+        )
+        stripe_fill = PatternFill("solid", fgColor="F7F9FC")
+
+        ws.freeze_panes = "A2"
+        ws.auto_filter.ref = ws.dimensions
+        ws.sheet_view.showGridLines = False
+        ws.row_dimensions[1].height = 24
+
+        for cell in ws[1]:
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = header_alignment
+            cell.border = border
+
+        for row_idx in range(2, ws.max_row + 1):
+            is_striped = row_idx % 2 == 0
+            for col_idx in range(1, ws.max_column + 1):
+                cell = ws.cell(row=row_idx, column=col_idx)
+                cell.border = border
+                cell.alignment = cell_alignment
+                if is_striped:
+                    cell.fill = stripe_fill
+
+        for col_idx, column_name in enumerate(export_df.columns, start=1):
+            col_letter = get_column_letter(col_idx)
+            values = [column_name, *export_df.iloc[:, col_idx - 1].tolist()]
+            max_length = max(len(str(v)) if v is not None else 0 for v in values)
+            width = min(max(max_length + 2, 12), 42)
+            if column_name in {"Beschreibung", "Notizen"}:
+                width = min(max(max_length + 2, 24), 56)
+            if column_name in CHECKBOX_COLS or column_name == "Fortschritt":
+                width = min(max(max_length + 2, 12), 16)
+                for row_idx in range(2, ws.max_row + 1):
+                    ws.cell(row=row_idx, column=col_idx).alignment = center_alignment
+            ws.column_dimensions[col_letter].width = width
+
+        if "Fortschritt" in export_df.columns:
+            progress_idx = export_df.columns.get_loc("Fortschritt") + 1
+            for row_idx in range(2, ws.max_row + 1):
+                ws.cell(row=row_idx, column=progress_idx).number_format = '0" %"'
+    data.seek(0)
+    return data.getvalue()
+
+
+def _download_filename(slug: str) -> str:
+    path = Path(st.session_state.get("pl_path") or "packliste.xlsx")
+    return f"{path.stem}_{slug}.xlsx"
+
+
+def _render_excel_download(
+    df: pd.DataFrame,
+    *,
+    slug: str,
+    key: str,
+    label: str = "Liste als Excel herunterladen",
+    sheet_name: str = "Liste",
+) -> None:
+    st.download_button(
+        label,
+        data=_to_excel_bytes(df, sheet_name=sheet_name),
+        file_name=_download_filename(slug),
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        key=key,
+    )
 
 
 # ── History ────────────────────────────────────────────────────────────────────
@@ -755,8 +849,9 @@ def _frag_packen() -> None:
     st.subheader("Jetzt reinigen und packen")
     cr     = ["Bereich", "Gegenstand", "Menge", "Kategorie", "Verpackt"]
     bk_r   = f"b_rein_{ver}"
+    view_r = df.loc[df["Reinigung"].astype(bool), cr].sort_values("Bereich")
     base_r = _get_frozen_base(
-        bk_r, df.loc[df["Reinigung"].astype(bool), cr].sort_values("Bereich")
+        bk_r, view_r
     )
     ek_r = f"e_rein_{ver}"
     if base_r.empty:
@@ -769,6 +864,12 @@ def _frag_packen() -> None:
             on_change=_make_callback(ek_r, base_r),
             column_config={k: v for k, v in pcfg.items() if k in cr},
         )
+    _render_excel_download(
+        view_r,
+        slug="jetzt_reinigen_und_packen",
+        key=f"dl_rein_{ver}",
+        sheet_name="Jetzt reinigen",
+    )
 
     st.divider()
 
@@ -776,8 +877,9 @@ def _frag_packen() -> None:
     st.subheader("Jetzt packen – Verbrauchsgegenstände")
     cn     = ["Bereich", "Gegenstand", "Menge", "Kategorie", "Verpackt"]
     bk_n   = f"b_nach_{ver}"
+    view_n = df.loc[df["Nachfüllen"].astype(bool), cn].sort_values("Bereich")
     base_n = _get_frozen_base(
-        bk_n, df.loc[df["Nachfüllen"].astype(bool), cn].sort_values("Bereich")
+        bk_n, view_n
     )
     ek_n = f"e_nach_{ver}"
     if base_n.empty:
@@ -790,6 +892,12 @@ def _frag_packen() -> None:
             on_change=_make_callback(ek_n, base_n),
             column_config={k: v for k, v in pcfg.items() if k in cn},
         )
+    _render_excel_download(
+        view_n,
+        slug="jetzt_packen_verbrauchsgegenstaende",
+        key=f"dl_nach_{ver}",
+        sheet_name="Jetzt packen",
+    )
 
     st.divider()
 
@@ -797,8 +905,9 @@ def _frag_packen() -> None:
     st.subheader("Kurz vor Event packen")
     ce     = ["Bereich", "Gegenstand", "Menge", "Kategorie"]
     bk_e   = f"b_event_{ver}"
+    view_e = df.loc[df["kurz vor Event packen"].astype(bool), ce].sort_values("Bereich")
     base_e = _get_frozen_base(
-        bk_e, df.loc[df["kurz vor Event packen"].astype(bool), ce].sort_values("Bereich")
+        bk_e, view_e
     )
     ek_e = f"e_event_{ver}"
     if base_e.empty:
@@ -811,6 +920,12 @@ def _frag_packen() -> None:
             on_change=_make_callback(ek_e, base_e),
             column_config={k: v for k, v in pcfg.items() if k in ce},
         )
+    _render_excel_download(
+        view_e,
+        slug="kurz_vor_event_packen",
+        key=f"dl_event_{ver}",
+        sheet_name="Kurz vor Event",
+    )
 
 
 @st.fragment
@@ -818,10 +933,13 @@ def _frag_verladen() -> None:
     _flush_full_rerun_after_editor_commit()
     ver   = st.session_state["pl_version"]
     df    = st.session_state["pl_df"]
+    view_v = (
+        df.groupby(["Bereich", "Kategorie"], sort=True)["Verladen"].first().reset_index()
+    )
     bk_v   = f"b_verl_{ver}"
     base_v = _get_frozen_base(
         bk_v,
-        df.groupby(["Bereich", "Kategorie"], sort=True)["Verladen"].first().reset_index(),
+        view_v,
     )
     ek_v = f"e_verl_{ver}"
     st.data_editor(
@@ -834,6 +952,12 @@ def _frag_verladen() -> None:
             "Verladen":  _cc_check("Verladen"),
         },
     )
+    _render_excel_download(
+        view_v,
+        slug="verladen",
+        key=f"dl_verl_{ver}",
+        sheet_name="Verladen",
+    )
 
 
 @st.fragment
@@ -845,8 +969,9 @@ def _frag_ersetzen() -> None:
     st.caption("In die Notizen das Problem reinschreiben.")
     cols_e   = ["Bereich", "Gegenstand", "Notizen"]
     bk_ers   = f"b_ers_{ver}"
+    view_ers = df.loc[~df["Nachfüllen"].astype(bool), cols_e].sort_values("Bereich")
     base_ers = _get_frozen_base(
-        bk_ers, df.loc[~df["Nachfüllen"].astype(bool), cols_e].sort_values("Bereich")
+        bk_ers, view_ers
     )
     ek_ers = f"e_ers_{ver}"
     if base_ers.empty:
@@ -863,6 +988,12 @@ def _frag_ersetzen() -> None:
                 "Notizen":    _cc_text("Notizen",    width="large"),
             },
         )
+    _render_excel_download(
+        view_ers,
+        slug="ersetzen",
+        key=f"dl_ers_{ver}",
+        sheet_name="Ersetzen",
+    )
 
 
 @st.fragment
@@ -872,7 +1003,8 @@ def _frag_definitionen() -> None:
     df   = st.session_state["pl_df"]
     cols = ["Gegenstand", "Beschreibung", "Bereich"]
     bk   = f"b_def_{ver}"
-    base = _get_frozen_base(bk, df[cols].sort_values("Bereich"))
+    view_def = df[cols].sort_values("Bereich")
+    base = _get_frozen_base(bk, view_def)
     ek   = f"e_def_{ver}"
     st.data_editor(
         base, key=ek, use_container_width=True,
@@ -883,6 +1015,12 @@ def _frag_definitionen() -> None:
             "Beschreibung": _cc_text("Beschreibung", width="large"),
             "Bereich":      _cc_text("Bereich",      width="small"),
         },
+    )
+    _render_excel_download(
+        view_def,
+        slug="definitionen",
+        key=f"dl_def_{ver}",
+        sheet_name="Definitionen",
     )
 
 
@@ -945,8 +1083,8 @@ def _frag_uebersicht() -> None:
             use_container_width=True,
             column_config={
                 "Bereich":      st.column_config.TextColumn("Bereich"),
-                "Verpackt":     st.column_config.NumberColumn("Verpackt", format="%d"),
-                "Gesamt":       st.column_config.NumberColumn("Gesamt",   format="%d"),
+                "Verpackt":     _cc_number_left("Verpackt", fmt="%d"),
+                "Gesamt":       _cc_number_left("Gesamt",   fmt="%d"),
                 "Fortschritt":  st.column_config.ProgressColumn(
                     "Fortschritt", min_value=0, max_value=100, format="%.0f %%"
                 ),
