@@ -5,6 +5,7 @@ from typing import Tuple
 
 import pandas as pd
 from PIL import Image
+from reportlab import rl_config
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfbase import pdfmetrics
@@ -55,6 +56,9 @@ CAP_NEXT = 37
 
 COLUMN_GAP_PADDING = 40
 RIGHT_MARGIN = 20
+TEMPLATE_IMAGE_MAX_WIDTH = 1200
+TEMPLATE_IMAGE_JPEG_QUALITY = 80
+LANCZOS = getattr(Image, "Resampling", Image).LANCZOS
 
 
 def y_from_top(y_top: float) -> float:
@@ -124,6 +128,35 @@ def _chunk_rows(rows: list) -> list:
     return pages
 
 
+def build_template_image_reader(
+    img_path: Path,
+    max_width: int = TEMPLATE_IMAGE_MAX_WIDTH,
+    jpeg_quality: int = TEMPLATE_IMAGE_JPEG_QUALITY,
+) -> ImageReader:
+    """
+    Keep large page backgrounds compressed inside the PDF.
+    The attendee text is drawn separately and stays sharp as vector text.
+    """
+    with Image.open(img_path) as im:
+        im.load()
+        rgb = im.convert("RGB")
+
+        if max_width and rgb.width > max_width:
+            target_height = round(rgb.height * (max_width / rgb.width))
+            rgb = rgb.resize((max_width, target_height), LANCZOS)
+
+        out = io.BytesIO()
+        rgb.save(
+            out,
+            format="JPEG",
+            quality=jpeg_quality,
+            optimize=True,
+            progressive=True,
+        )
+        out.seek(0)
+        return ImageReader(out)
+
+
 def generate_pdf_bytes(
     df: pd.DataFrame,
     template_p1: Path,
@@ -152,6 +185,8 @@ def generate_pdf_bytes(
             im.verify()
 
     myriad_reg, _myriad_bold, plex_reg, plex_bold = try_register_fonts(font_dir)
+    template_p1_reader = build_template_image_reader(template_p1)
+    template_p2_reader = build_template_image_reader(template_p2)
 
     rows = df[["Unternehmensname", "Jobbezeichnung"]].values.tolist()
     n = len(rows)
@@ -162,67 +197,73 @@ def generate_pdf_bytes(
     maxw_company_p2 = (P2_JOB_X - P2_COMPANY_X) - COLUMN_GAP_PADDING
     maxw_job = (PAGE_W - RIGHT_MARGIN) - P2_JOB_X
 
-    buf = io.BytesIO()
-    c = canvas.Canvas(buf, pagesize=A4)
+    prev_use_a85 = getattr(rl_config, "useA85", 1)
+    rl_config.useA85 = 0
 
-    def draw_bg(img_path: Path):
-        c.drawImage(
-            ImageReader(str(img_path)),
-            0, 0,
-            width=PAGE_W,
-            height=PAGE_H,
-            preserveAspectRatio=False,
-            mask="auto",
-        )
+    try:
+        buf = io.BytesIO()
+        c = canvas.Canvas(buf, pagesize=A4, pageCompression=1)
 
-    for page_idx in range(total_pages):
-        is_first = page_idx == 0
-        draw_bg(template_p1 if is_first else template_p2)
+        def draw_bg(img_reader: ImageReader):
+            c.drawImage(
+                img_reader,
+                0, 0,
+                width=PAGE_W,
+                height=PAGE_H,
+                preserveAspectRatio=False,
+                mask="auto",
+            )
 
-        # Seite/page x/y
-        c.setFont(plex_bold, SEITE_SIZE)
-        c.setFillColorRGB(*BLUE)
-        c.drawString(SEITE_X, y_from_top(SEITE_Y_TOP), f"{page_word} {page_idx + 1}/{total_pages}")
+        for page_idx in range(total_pages):
+            is_first = page_idx == 0
+            draw_bg(template_p1_reader if is_first else template_p2_reader)
 
-        # Status nur Seite 1
-        if is_first:
-            c.setFont(plex_reg, STATUS_SIZE)
-            c.setFillColorRGB(*WHITE)
-            c.drawString(STATUS_X, y_from_top(STATUS_Y_TOP), f"Status: {n} {people_word}")
+            # Seite/page x/y
+            c.setFont(plex_bold, SEITE_SIZE)
+            c.setFillColorRGB(*BLUE)
+            c.drawString(SEITE_X, y_from_top(SEITE_Y_TOP), f"{page_word} {page_idx + 1}/{total_pages}")
 
-        c.setFillColorRGB(*BLACK)
+            # Status nur Seite 1
+            if is_first:
+                c.setFont(plex_reg, STATUS_SIZE)
+                c.setFillColorRGB(*WHITE)
+                c.drawString(STATUS_X, y_from_top(STATUS_Y_TOP), f"Status: {n} {people_word}")
 
-        page_rows = pages[page_idx] if page_idx < len(pages) else []
+            c.setFillColorRGB(*BLACK)
 
-        if is_first:
-            base_x_company = P1_COMPANY_X
-            base_x_job = P1_JOB_X
-            first_y_company = P1_FIRST_Y_COMPANY_TOP
-            first_y_job = P1_FIRST_Y_JOB_TOP
-            step = LINE_STEP
-            maxw_company = maxw_company_p1
-        else:
-            base_x_company = P2_COMPANY_X
-            base_x_job = P2_JOB_X
-            first_y_company = P2_FIRST_Y_COMPANY_TOP
-            first_y_job = P2_FIRST_Y_JOB_TOP
-            step = LINE_STEP_P2
-            maxw_company = maxw_company_p2
+            page_rows = pages[page_idx] if page_idx < len(pages) else []
 
-        for i, (company, job) in enumerate(page_rows):
-            y_company = y_from_top(first_y_company + i * step)
-            y_job = y_from_top(first_y_job + i * step)
+            if is_first:
+                base_x_company = P1_COMPANY_X
+                base_x_job = P1_JOB_X
+                first_y_company = P1_FIRST_Y_COMPANY_TOP
+                first_y_job = P1_FIRST_Y_JOB_TOP
+                step = LINE_STEP
+                maxw_company = maxw_company_p1
+            else:
+                base_x_company = P2_COMPANY_X
+                base_x_job = P2_JOB_X
+                first_y_company = P2_FIRST_Y_COMPANY_TOP
+                first_y_job = P2_FIRST_Y_JOB_TOP
+                step = LINE_STEP_P2
+                maxw_company = maxw_company_p2
 
-            company_txt, company_size = fit_text(str(company), myriad_reg, ROW_FONT_SIZE, maxw_company)
-            job_txt, job_size = fit_text(str(job), myriad_reg, ROW_FONT_SIZE, maxw_job)
+            for i, (company, job) in enumerate(page_rows):
+                y_company = y_from_top(first_y_company + i * step)
+                y_job = y_from_top(first_y_job + i * step)
 
-            c.setFont(myriad_reg, company_size)
-            c.drawString(base_x_company, y_company, company_txt)
+                company_txt, company_size = fit_text(str(company), myriad_reg, ROW_FONT_SIZE, maxw_company)
+                job_txt, job_size = fit_text(str(job), myriad_reg, ROW_FONT_SIZE, maxw_job)
 
-            c.setFont(myriad_reg, job_size)
-            c.drawString(base_x_job, y_job, job_txt)
+                c.setFont(myriad_reg, company_size)
+                c.drawString(base_x_company, y_company, company_txt)
 
-        c.showPage()
+                c.setFont(myriad_reg, job_size)
+                c.drawString(base_x_job, y_job, job_txt)
 
-    c.save()
-    return buf.getvalue()
+            c.showPage()
+
+        c.save()
+        return buf.getvalue()
+    finally:
+        rl_config.useA85 = prev_use_a85

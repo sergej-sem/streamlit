@@ -1,6 +1,8 @@
 import base64
 import io
+import re
 import time
+from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
@@ -31,6 +33,7 @@ FONT_DIR = ROOT_DIR / "fonts"
 TEMPLATE_DIR = ROOT_DIR / "assets" / "vorlagen_teilnehmerlisten"
 
 LISTS_TTL_SECONDS = 300  # auto-refresh alle 5 Minuten (ohne Button)
+KNOWN_SEGMENT_CODES = {"BER", "DOR", "MUC"}
 
 
 def pick_existing(*candidates: Path) -> Path:
@@ -48,6 +51,85 @@ def template_candidates(prefix: str, city_code: str, lang: str) -> list[Path]:
         TEMPLATE_DIR / f"{prefix}_{city_code}_{lang.lower()}.png",
         TEMPLATE_DIR / f"{prefix}_{city_code.lower()}_{lang.lower()}.png",
     ]
+
+
+def finalize_pdf_bytes(pdf_bytes: bytes, password: str = "") -> bytes:
+    reader = PdfReader(io.BytesIO(pdf_bytes))
+    writer = PdfWriter()
+    writer.append(reader)
+
+    for page in writer.pages:
+        page.compress_content_streams(level=9)
+
+    if writer.pages:
+        # Open the first page at 75 % zoom in the PDF viewer.
+        writer._root_object[NameObject("/OpenAction")] = ArrayObject([
+            writer.pages[0].indirect_reference,
+            NameObject("/XYZ"),
+            NullObject(),
+            NullObject(),
+            FloatObject(0.75),
+        ])
+
+    writer.compress_identical_objects(remove_identicals=True, remove_orphans=True)
+
+    if password:
+        writer.encrypt(
+            user_password=password,
+            owner_password=password,
+            algorithm="AES-256",
+        )
+
+    out = io.BytesIO()
+    writer.write(out)
+    return out.getvalue()
+
+
+def normalize_segment_year(raw_year: str) -> str:
+    if len(raw_year) == 4:
+        return raw_year
+    return f"20{raw_year}"
+
+
+def extract_segment_code_and_year(segment_name: str) -> tuple[str, str]:
+    tokens = [tok for tok in re.split(r"[^A-Za-z0-9]+", segment_name.upper()) if tok]
+
+    for token in tokens:
+        match = re.fullmatch(r"(?P<code>[A-Z]{3})(?P<year>\d{2}|\d{4})", token)
+        if match:
+            return match.group("code"), normalize_segment_year(match.group("year"))
+
+        match = re.fullmatch(r"(?P<year>\d{2}|\d{4})(?P<code>[A-Z]{3})", token)
+        if match:
+            return match.group("code"), normalize_segment_year(match.group("year"))
+
+    for left, right in zip(tokens, tokens[1:]):
+        if re.fullmatch(r"[A-Z]{3}", left) and re.fullmatch(r"\d{2}|\d{4}", right):
+            return left, normalize_segment_year(right)
+        if re.fullmatch(r"\d{2}|\d{4}", left) and re.fullmatch(r"[A-Z]{3}", right):
+            return right, normalize_segment_year(left)
+
+    code = next((tok for tok in tokens if tok in KNOWN_SEGMENT_CODES), "")
+    year_token = next((tok for tok in tokens if re.fullmatch(r"\d{2}|\d{4}", tok)), "")
+    year = normalize_segment_year(year_token) if year_token else ""
+    return code, year
+
+
+def build_pdf_filename(segment_name: str, lang: str, encrypt: bool) -> str:
+    code, year = extract_segment_code_and_year(segment_name)
+    event_part = f"{code}{year}"
+    date_part = datetime.now().strftime("%d%m%Y")
+
+    parts = ["mse", "Teilnehmerliste"]
+    if event_part:
+        parts.append(event_part)
+    if lang:
+        parts.append(lang.upper())
+    parts.append(date_part)
+    if encrypt:
+        parts.append("PW")
+
+    return f"{'_'.join(parts)}.pdf"
 
 
 def fetch_lists_map() -> dict[str, str]:
@@ -130,11 +212,6 @@ if selected_name not in lists_map:
 list_id = lists_map[selected_name]
 st.caption(f"List ID: {list_id}")
 
-# --- Dateiname ---
-_safe_name = "".join(c if c not in r"""\/:*?'"<>|""" else "_" for c in selected_name)
-pdf_filename = f"{_safe_name}_Teilnehmerliste_{lang}.pdf"
-_pdf_filename_js = pdf_filename.replace("'", "\\'").replace("\\", "\\\\")
-
 # --- Verschlüsselung ---
 encrypt = st.checkbox("PDF verschlüsseln")
 pdf_password = ""
@@ -143,6 +220,10 @@ if encrypt:
     if not pdf_password:
         st.warning("Bitte ein Passwort eingeben.")
         st.stop()
+
+# --- Dateiname ---
+pdf_filename = build_pdf_filename(selected_name, lang, encrypt)
+_pdf_filename_js = pdf_filename.replace("'", "\\'").replace("\\", "\\\\")
 
 # --- Session-State-Initialisierung ---
 for _key, _default in [
@@ -197,29 +278,10 @@ if not st.session_state.pdf_ready:
             )
 
         with st.spinner("PDF finalisieren..."):
-            _reader = PdfReader(io.BytesIO(pdf_bytes))
-            _writer = PdfWriter()
-            _writer.append(_reader)
-
-            # Anfangszoom auf 75 % setzen
-            _writer._root_object[NameObject("/OpenAction")] = ArrayObject([
-                _writer.pages[0].indirect_reference,
-                NameObject("/XYZ"),
-                NullObject(),
-                NullObject(),
-                FloatObject(0.75),
-            ])
-
-            if encrypt:
-                _writer.encrypt(
-                    user_password=pdf_password,
-                    owner_password=pdf_password,
-                    algorithm="AES-256",
-                )
-
-            _out = io.BytesIO()
-            _writer.write(_out)
-            pdf_bytes = _out.getvalue()
+            pdf_bytes = finalize_pdf_bytes(
+                pdf_bytes,
+                password=pdf_password if encrypt else "",
+            )
 
         st.session_state.pdf_bytes = pdf_bytes
         st.session_state.pdf_ready = True
@@ -264,6 +326,6 @@ else:
     st.download_button(
         "Nochmal herunterladen",
         data=st.session_state.pdf_bytes,
-        file_name=st.session_state.pdf_filename,
+        file_name=pdf_filename,
         mime="application/pdf",
     )
