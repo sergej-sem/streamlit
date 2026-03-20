@@ -150,30 +150,30 @@ def create_imap_drafts(
 
 def build_imap_draft_log_dataframe(records: list[ImapDraftRecord]) -> pd.DataFrame:
     result_labels = {
-        "draft_created": "Gespeichert",
+        "draft_created": "Entwurf gespeichert",
         "error": "Fehler",
     }
-    rows = [
-        {
+    show_copy = any((record.cc_email or "").strip() for record in records)
+    show_hint = any((record.details or "").strip() for record in records)
+
+    rows = []
+    for record in records:
+        row = {
             "Sponsor": record.sponsor_name,
             "E-Mail": record.to_email,
-            "Kopie": record.cc_email,
-            "Postfach": record.mailbox,
-            "Ordner": record.drafts_folder,
-            "Ergebnis": result_labels.get(record.result, record.result),
-            "Hinweis": record.details or record.server_response,
+            "Status": result_labels.get(record.result, record.result),
         }
-        for record in records
-    ]
-    return pd.DataFrame(
-        rows,
-        columns=[
-            "Sponsor",
-            "E-Mail",
-            "Kopie",
-            "Postfach",
-            "Ordner",
-            "Ergebnis",
-            "Hinweis",
-        ],
-    )
+        if show_copy:
+            row["Kopie"] = record.cc_email or "-"
+        if show_hint:
+            row["Hinweis"] = (record.details or "").strip() or "-"
+        rows.append(row)
+
+    columns = ["Sponsor", "E-Mail"]
+    if show_copy:
+        columns.append("Kopie")
+    columns.append("Status")
+    if show_hint:
+        columns.append("Hinweis")
+
+    return pd.DataFrame(rows, columns=columns)
