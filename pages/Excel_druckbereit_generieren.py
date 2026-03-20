@@ -19,6 +19,7 @@ from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Border, Font, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.page import PageMargins
+from streamlit_ui import render_page_title
 
 
 # ----------------------------
@@ -369,8 +370,8 @@ def build_excel_bytes(df: pd.DataFrame, list_title: str, widths: Dict[str, float
 # ----------------------------
 # Streamlit UI
 # ----------------------------
-st.set_page_config(page_title="HubSpot -> Druck-Excel", layout="centered")
-st.title("HubSpot → Excel Export (druckfertig)")
+st.set_page_config(page_title="HubSpot -> Druck-Excel", layout="wide")
+render_page_title("HubSpot → Excel Export (druckfertig)")
 
 options = fetch_historie_options()
 

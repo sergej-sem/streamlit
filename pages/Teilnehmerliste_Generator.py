@@ -18,6 +18,7 @@ from teilnehmerliste_generator.hubspot_client import (
 )
 from teilnehmerliste_generator.transform import build_teilnehmerliste
 from teilnehmerliste_generator.pdf_render import generate_pdf_bytes
+from streamlit_ui import render_page_title
 
 
 st.set_page_config(
@@ -156,8 +157,7 @@ def get_lists_map_autorefresh(ttl_seconds: int = LISTS_TTL_SECONDS) -> dict[str,
     return st.session_state["lists_map"]
 
 
-st.title("Teilnehmerliste Generator")
-st.caption("HubSpot Segment → Regeln → PDF")
+render_page_title("Teilnehmerliste Generator")
 
 # --- Sprache ---
 lang_label = st.radio("PDF Sprache", ["Deutsch", "English"], horizontal=True)

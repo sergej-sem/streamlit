@@ -19,9 +19,10 @@ from badgegen.historie_options import fetch_historie_options
 from badgegen.category import derive_kategorie_from_historie, ALLOWED_CATEGORIES
 from badgegen.render_pdf import render_badges_pdf_bytes
 from badgegen.filter_builder import render_filter_builder
+from streamlit_ui import render_page_title
 
 st.set_page_config(page_title="Badge Generator (HubSpot)", layout="wide")
-st.title("Badge Generator (HubSpot)")
+render_page_title("Badge Generator (HubSpot)")
 
 token = st.secrets.get("HUBSPOT_TOKEN")
 if not token:
@@ -75,8 +76,6 @@ def _build_pdf_cached(
     )
 
 
-st.subheader("Suche (HubSpot-Logik)")
-
 col_filters, col_settings = st.columns([0.68, 0.32], gap="large")
 
 with col_settings:
@@ -103,8 +102,6 @@ with col_settings:
         }
 
 with col_filters:
-    st.markdown("### Erweiterte Filter")
-
     historie_opts = _cached_historie_options()
 
     compiled_groups = render_filter_builder(

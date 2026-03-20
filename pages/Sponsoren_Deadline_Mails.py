@@ -20,6 +20,7 @@ from sponsor_deadline_mails import (
     generate_deadline_mails,
     list_workbook_sheets,
 )
+from streamlit_ui import render_page_title
 
 
 st.set_page_config(page_title="Deadline-E-Mails für Sponsoren", layout="wide")
@@ -261,7 +262,7 @@ _init_state()
 
 base_imap_config = _load_base_imap_config()
 
-st.title("Deadline-E-Mails für Sponsoren")
+render_page_title("Deadline-E-Mails für Sponsoren")
 st.caption(
     "Sponsoren-Datei hochladen, E-Mails erstellen, Vorschau prüfen und Entwürfe direkt im Postfach speichern."
 )

@@ -4,6 +4,7 @@ from pathlib import Path
 
 import streamlit as st
 from streamlit_searchbox import st_searchbox  # pip install streamlit-searchbox
+from streamlit_ui import render_page_title
 
 st.set_page_config(page_title="Dashboard", layout="wide")
 
@@ -17,18 +18,49 @@ SEARCHBOX_KEY = "page_searchbox"    # eigener Key zum sauberen Reset
 st.markdown(
     """
     <style>
+      .stButton {
+        width: 100%;
+      }
       .stButton > button {
         width: 100%;
-        padding: 1.05rem 1rem;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 0.55rem 0.95rem;
+        min-height: 3rem;
         border-radius: 16px;
-        font-size: 1.05rem;
+        font-size: 1rem;
         font-weight: 600;
       }
-      div.block-container { padding-top: 2.2rem; }
+      .stButton > button p {
+        margin: 0;
+        text-align: center;
+      }
       .muted { opacity: 0.7; font-size: 0.95rem; }
       .stCaption { margin-top: -0.25rem; }
       .section-title { font-size: 1.35rem; font-weight: 700; margin: 1.1rem 0 0.6rem 0; }
       .soft-divider { height: 1px; opacity: 0.12; margin: 1.25rem 0; background: currentColor; }
+      .st-key-dashboard-cards-grid [data-testid="stHorizontalBlock"] {
+        gap: 0.75rem;
+      }
+      .st-key-dashboard-cards-grid .stButton > button {
+        min-height: 3.25rem;
+      }
+      @media (max-width: 980px) {
+        .st-key-dashboard-cards-grid [data-testid="stHorizontalBlock"] {
+          flex-wrap: wrap;
+        }
+        .st-key-dashboard-cards-grid [data-testid="column"] {
+          min-width: calc(50% - 0.375rem) !important;
+          flex: 1 1 calc(50% - 0.375rem) !important;
+        }
+      }
+      @media (max-width: 640px) {
+        .st-key-dashboard-cards-grid [data-testid="column"] {
+          min-width: 100% !important;
+          flex: 1 1 100% !important;
+        }
+      }
     </style>
     """,
     unsafe_allow_html=True,
@@ -114,19 +146,30 @@ def _go_to(item: dict):
         st.page_link(item["path"], label=item["title"])
 
 
-def _render_grid(items: list[dict], key_prefix: str, cols_max: int = 4):
+def _render_page_button(item: dict, key_prefix: str):
+    if st.button(item["title"], key=f"{key_prefix}_{item['path']}", use_container_width=True):
+        _go_to(item)
+    if item["category"] != ROOT_CATEGORY:
+        st.caption(item["category"])
+
+
+def _render_card_row(items: list[dict], key_prefix: str):
     if not items:
         return
 
-    n_cols = min(cols_max, max(2, len(items))) if len(items) > 1 else 1
-    cols = st.columns(n_cols)
+    cols = st.columns(len(items), gap="small")
+    for col, item in zip(cols, items):
+        with col:
+            _render_page_button(item, key_prefix=key_prefix)
 
-    for i, item in enumerate(items):
-        with cols[i % n_cols]:
-            if st.button(item["title"], key=f"{key_prefix}_{item['path']}"):
-                _go_to(item)
-            if item["category"] != ROOT_CATEGORY:
-                st.caption(item["category"])
+
+def _render_dashboard_cards(items: list[dict], key_prefix: str):
+    if not items:
+        return
+
+    with st.container(key="dashboard-cards-grid"):
+        for start in range(0, len(items), 3):
+            _render_card_row(items[start:start + 3], key_prefix=key_prefix)
 
 
 def _label_for_dropdown(p: dict, title_counts: dict[str, int]) -> str:
@@ -137,7 +180,7 @@ def _label_for_dropdown(p: dict, title_counts: dict[str, int]) -> str:
 
 
 # ---------- UI ----------
-st.markdown("<div class='section-title'>Dashboard</div>", unsafe_allow_html=True)
+render_page_title("Dashboard")
 
 pages_all = _collect_pages_cached(str(ROOT), str(PAGES_DIR))
 if not pages_all:
@@ -149,22 +192,8 @@ title_counts: dict[str, int] = {}
 for p in pages_all:
     title_counts[p["title"]] = title_counts.get(p["title"], 0) + 1
 
-# Default-Vorschläge: zuletzt geöffnet + Fallback
-recent = _dedupe_recent(st.session_state.get("recent_pages", []))
-st.session_state["recent_pages"] = recent  # ggf. alte Duplikate direkt bereinigen
-
-recent_paths = [r["path"] for r in recent]
-recent_items = [p for p in pages_all if p["path"] in recent_paths]
-fallback_items = pages_all[:8]
-
-default_items = []
-seen = set()
-for p in (recent_items + fallback_items):
-    if p["path"] not in seen:
-        default_items.append(p)
-        seen.add(p["path"])
-    if len(default_items) >= 8:
-        break
+# Default-Vorschläge: alphabetisch
+default_items = sorted(pages_all, key=lambda p: (p["title"].lower(), p["category"].lower()))[:8]
 
 default_options = [(_label_for_dropdown(p, title_counts), p) for p in default_items]
 
@@ -211,32 +240,9 @@ st_searchbox(
     submit_function=_on_submit,
 )
 
-# ---- Zuletzt geöffnet ----
-recent = _dedupe_recent(st.session_state.get("recent_pages", []))
-recent_items = []
-for r in recent:
-    item = next((p for p in pages_all if p["path"] == r["path"]), None)
-    if item:
-        recent_items.append(item)
-
-if recent_items:
-    st.markdown("<div class='soft-divider'></div>", unsafe_allow_html=True)
-    st.markdown("<div class='section-title'>Zuletzt geöffnet</div>", unsafe_allow_html=True)
-    _render_grid(recent_items, key_prefix="recent", cols_max=4)
-
 # ---- Alle Bereiche ----
 st.markdown("<div class='soft-divider'></div>", unsafe_allow_html=True)
 st.markdown("<div class='section-title'>Alle Bereiche</div>", unsafe_allow_html=True)
 
-root_items = sorted([p for p in pages_all if p["category"] == ROOT_CATEGORY], key=lambda x: x["title"])
-other_cats = sorted({p["category"] for p in pages_all if p["category"] != ROOT_CATEGORY})
-
-# Root-Pages (ohne Überschrift)
-if root_items:
-    _render_grid(root_items, key_prefix="nav_root", cols_max=4)
-
-# Kategorien
-for cat in other_cats:
-    st.markdown(f"<div class='section-title' style='font-size:1.15rem; margin-top:1.0rem'>{cat}</div>", unsafe_allow_html=True)
-    items = sorted([p for p in pages_all if p["category"] == cat], key=lambda x: x["title"])
-    _render_grid(items, key_prefix=f"nav_{cat}", cols_max=4)
+all_items = sorted(pages_all, key=lambda p: (p["title"].lower(), p["category"].lower()))
+_render_dashboard_cards(all_items, key_prefix="nav_all")

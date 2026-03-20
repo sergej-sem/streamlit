@@ -92,6 +92,7 @@ import pandas as pd
 import streamlit as st
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
+from streamlit_ui import apply_page_title_style, page_title_html
 
 st.set_page_config(page_title="Packliste", layout="wide")
 
@@ -883,20 +884,14 @@ if _excel_result["status"] == "error":
 elif _excel_result["status"] == "ok":
     st.session_state.pop("pl_excel_err", None)
 
-st.markdown(
-    "<style>div.block-container{padding-top:2.2rem}</style>",
-    unsafe_allow_html=True,
-)
+apply_page_title_style()
 
 hist_len = len(st.session_state.get("pl_history", []))
 redo_len = len(st.session_state.get("pl_redo_stack", []))
 title_col, btn_col = st.columns([7, 2])
 
 with title_col:
-    st.markdown(
-        "<div style='font-size:1.35rem;font-weight:700;margin:1.1rem 0 0.6rem 0'>Packliste</div>",
-        unsafe_allow_html=True,
-    )
+    st.markdown(page_title_html("Packliste"), unsafe_allow_html=True)
 
 with btn_col:
     st.markdown("<div style='margin-top:1.1rem'></div>", unsafe_allow_html=True)

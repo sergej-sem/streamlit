@@ -8,6 +8,7 @@ import pandas as pd
 import requests
 import streamlit as st
 import msal
+from streamlit_ui import render_page_title
 
 
 # ============================================================
@@ -479,7 +480,7 @@ def user_payload(
 # UI
 # ============================================================
 st.set_page_config(page_title="Microsoft-Benutzer anlegen", layout="wide")
-st.title("Microsoft-Benutzer anlegen (CSV/XLSX → Entra ID)")
+render_page_title("Microsoft-Benutzer anlegen (CSV/XLSX → Entra ID)")
 
 st.caption(
     "Ablauf: Datei hochladen → Plan prüfen → (optional) Testlauf → Benutzer anlegen."
