@@ -6,6 +6,7 @@ from datetime import date
 import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
+from streamlit_searchbox import st_searchbox
 
 from sponsor_deadline_mails import (
     DEFAULT_EVENT_CITY,
@@ -21,21 +22,24 @@ from sponsor_deadline_mails import (
 )
 
 
-st.set_page_config(page_title="Sponsoren Deadline Mails", layout="wide")
+st.set_page_config(page_title="Deadline-E-Mails für Sponsoren", layout="wide")
 
 SUMMARY_COLUMNS = [
-    "Ausgewaehlt",
+    "Ausgewählt",
     "Sponsor",
     "Sprache",
     "Paket",
-    "To",
-    "CC",
-    "Gruen",
-    "Rot",
-    "Gelb",
-    "Weiss",
+    "E-Mail",
+    "Kopie",
+    "Erhalten",
+    "Offen",
+    "Ausstehend",
+    "Empfohlen",
 ]
-SUMMARY_SCHEMA_VERSION = 2
+SUMMARY_SCHEMA_VERSION = 4
+SENDER_EMAIL_SUGGESTIONS = [
+    "severin.wagner@mysecurityevent.de",
+]
 
 
 def _init_state() -> None:
@@ -83,22 +87,37 @@ def _secret_bool(section, key: str, default: bool) -> bool:
     return bool(value)
 
 
+def _search_sender_emails(searchterm: str) -> list[str]:
+    term = (searchterm or "").strip().lower()
+    if not term:
+        return SENDER_EMAIL_SUGGESTIONS
+
+    startswith_matches = [
+        email for email in SENDER_EMAIL_SUGGESTIONS
+        if email.lower().startswith(term)
+    ]
+    contains_matches = [
+        email for email in SENDER_EMAIL_SUGGESTIONS
+        if term in email.lower() and email not in startswith_matches
+    ]
+    return startswith_matches + contains_matches
+
+
 def _load_base_imap_config() -> ImapDraftConfig | None:
     if "mse_imap_mail_drafts" not in st.secrets:
         return None
 
     section = st.secrets["mse_imap_mail_drafts"]
-    required_keys = ("host", "port", "username", "password")
+    required_keys = ("host", "port")
     if not all(key in section for key in required_keys):
         return None
 
     return ImapDraftConfig(
         host=str(section["host"]).strip(),
         port=int(section["port"]),
-        username=str(section["username"]).strip(),
-        password=str(section["password"]),
+        username="",
+        password="",
         drafts_folder=str(section.get("drafts_folder", "Drafts")).strip() or "Drafts",
-        from_address=str(section.get("from_address", section["username"])).strip(),
         use_ssl=_secret_bool(section, "use_ssl", True),
     )
 
@@ -106,7 +125,7 @@ def _load_base_imap_config() -> ImapDraftConfig | None:
 def _selected_mail_numbers(summary_df) -> set[int]:
     if summary_df is None or summary_df.empty:
         return set()
-    mask = summary_df["Ausgewaehlt"].fillna(False).astype(bool)
+    mask = summary_df["Ausgewählt"].fillna(False).astype(bool)
     return {int(mail_number) for mail_number in summary_df.index[mask].tolist()}
 
 
@@ -118,18 +137,18 @@ def _build_summary_editor_df(result):
     summary_df = build_summary_dataframe(result).reset_index(drop=True)
     summary_df.index = pd.RangeIndex(start=1, stop=len(summary_df) + 1, step=1)
     summary_df.index.name = "MailNr"
-    summary_df.insert(0, "Ausgewaehlt", True)
+    summary_df.insert(0, "Ausgewählt", True)
     summary_df = summary_df.rename(
         columns={
             "sponsor_name": "Sponsor",
             "language": "Sprache",
             "package": "Paket",
-            "to_email": "To",
-            "cc_email": "CC",
-            "green_count": "Gruen",
-            "red_count": "Rot",
-            "yellow_count": "Gelb",
-            "white_count": "Weiss",
+            "to_email": "E-Mail",
+            "cc_email": "Kopie",
+            "green_count": "Erhalten",
+            "red_count": "Offen",
+            "yellow_count": "Ausstehend",
+            "white_count": "Empfohlen",
         }
     )
     return summary_df[SUMMARY_COLUMNS].copy()
@@ -185,11 +204,11 @@ def _sync_summary_selection(editor_key: str, frozen_base: pd.DataFrame) -> None:
         if pos >= len(frozen_base):
             continue
         mail_number = frozen_base.index[pos]
-        if "Ausgewaehlt" not in changes:
+        if "Ausgewählt" not in changes:
             continue
-        new_value = bool(changes["Ausgewaehlt"])
-        if bool(summary_df.at[mail_number, "Ausgewaehlt"]) != new_value:
-            summary_df.at[mail_number, "Ausgewaehlt"] = new_value
+        new_value = bool(changes["Ausgewählt"])
+        if bool(summary_df.at[mail_number, "Ausgewählt"]) != new_value:
+            summary_df.at[mail_number, "Ausgewählt"] = new_value
             changed = True
 
     if changed:
@@ -223,18 +242,18 @@ def _frag_summary() -> None:
         num_rows="fixed",
         on_change=_make_summary_callback(editor_key, frozen_base),
         column_config={
-            "Ausgewaehlt": st.column_config.CheckboxColumn("Ausgewaehlt"),
+            "Ausgewählt": st.column_config.CheckboxColumn("Ausgewählt"),
             "Sponsor": st.column_config.TextColumn("Sponsor", width="medium"),
             "Sprache": st.column_config.TextColumn("Sprache", width="small"),
             "Paket": st.column_config.TextColumn("Paket", width="small"),
-            "To": st.column_config.TextColumn("To", width="medium"),
-            "CC": st.column_config.TextColumn("CC", width="medium"),
-            "Gruen": st.column_config.NumberColumn("Gruen", format="%d", width="small"),
-            "Rot": st.column_config.NumberColumn("Rot", format="%d", width="small"),
-            "Gelb": st.column_config.NumberColumn("Gelb", format="%d", width="small"),
-            "Weiss": st.column_config.NumberColumn("Weiss", format="%d", width="small"),
+            "E-Mail": st.column_config.TextColumn("E-Mail", width="medium"),
+            "Kopie": st.column_config.TextColumn("Kopie", width="medium"),
+            "Erhalten": st.column_config.NumberColumn("Erhalten", format="%d", width="small"),
+            "Offen": st.column_config.NumberColumn("Offen", format="%d", width="small"),
+            "Ausstehend": st.column_config.NumberColumn("Ausstehend", format="%d", width="small"),
+            "Empfohlen": st.column_config.NumberColumn("Empfohlen", format="%d", width="small"),
         },
-        disabled=["Sponsor", "Sprache", "Paket", "To", "CC", "Gruen", "Rot", "Gelb", "Weiss"],
+        disabled=["Sponsor", "Sprache", "Paket", "E-Mail", "Kopie", "Erhalten", "Offen", "Ausstehend", "Empfohlen"],
     )
 
 
@@ -242,24 +261,22 @@ _init_state()
 
 base_imap_config = _load_base_imap_config()
 
-st.title("Sponsoren Deadline Mails")
+st.title("Deadline-E-Mails für Sponsoren")
 st.caption(
-    "Excel hochladen, Mails generieren, HTML pruefen und serverseitige Entwuerfe "
-    "per IMAP direkt im Drafts-Ordner des cPanel-Postfachs anlegen."
+    "Sponsoren-Datei hochladen, E-Mails erstellen, Vorschau prüfen und Entwürfe direkt im Postfach speichern."
 )
 
 if base_imap_config is None:
     st.error(
-        "IMAP ist fuer diese Seite noch nicht konfiguriert. "
-        "Erwartet wird ein Secret-Block `mse_imap_mail_drafts` mit `host`, `port`, "
-        "`username`, `password` und optional `drafts_folder`, `from_address`, `use_ssl`."
+        "Die Verbindung zum Postfach ist für diese Seite noch nicht eingerichtet. "
+        "Bitte lass die technische Konfiguration prüfen."
     )
     st.stop()
 
 uploaded_file = st.file_uploader(
     "Sponsoren-Excel hochladen",
     type=["xlsx"],
-    help="Erwartet dieselbe Struktur wie das Ursprungsskript mit dem Sheet 'Deals'.",
+    help="Bitte die Sponsoren-Datei im XLSX-Format hochladen. Sie sollte das Blatt `Deals` enthalten.",
 )
 
 if uploaded_file is None:
@@ -289,18 +306,36 @@ with date_col:
     event_end = st.date_input("Event-Ende", value=DEFAULT_EVENT_END)
 
 with imap_col:
-    drafts_folder = st.text_input(
-        "Drafts-Ordner",
-        value=base_imap_config.drafts_folder,
-        help="Der exakte IMAP-Ordnername fuer Entwuerfe, z. B. `Drafts`, `Entwuerfe` oder `INBOX.Drafts`.",
+    imap_username = st_searchbox(
+        _search_sender_emails,
+        help="Mit dieser Adresse werden die Entwürfe in Deinem Postfach gespeichert.",
+        key="sdm_sender_email",
+        label="E-Mail-Adresse",
+        placeholder="vorname.nachname@mysecurityevent.de",
+        default="",
+        default_use_searchterm=True,
+        default_options=SENDER_EMAIL_SUGGESTIONS,
+        edit_after_submit="option",
     )
-    st.caption(f"Konfiguriertes IMAP-Postfach: `{base_imap_config.username}`")
+    if imap_username is None:
+        imap_username = ""
+    imap_password = st.text_input(
+        "E-Mail-Passwort",
+        type="password",
+        help="Das Passwort für dieses Postfach.",
+    )
+    drafts_folder = st.text_input(
+        "Ordner für Entwürfe",
+        value=base_imap_config.drafts_folder,
+        help="Diesen Wert bitte normalerweise nicht ändern. Nur anpassen, wenn Deine Entwürfe in einem anderen Ordner gespeichert werden.",
+    )
+    st.caption("Die Verbindung zum Postfach ist bereits eingerichtet.")
     st.markdown("<div style='margin-top: 1.7rem'></div>", unsafe_allow_html=True)
     generate_clicked = st.button("Generieren", type="primary", use_container_width=True)
 
 if generate_clicked:
     if not isinstance(event_start, date) or not isinstance(event_end, date):
-        st.error("Bitte gueltige Event-Daten angeben.")
+        st.error("Bitte gültige Event-Daten angeben.")
     elif event_end < event_start:
         st.error("Das Event-Ende darf nicht vor dem Event-Start liegen.")
     else:
@@ -325,11 +360,11 @@ if generate_clicked:
 
 result = st.session_state["sdm_result"]
 if result is None:
-    st.info("Mit 'Generieren' wird ein in-memory Snapshot fuer Vorschau und Draft-Erstellung erstellt.")
+    st.info("Klicke auf 'Generieren', um die E-Mails zu erstellen und vorab zu prüfen.")
     st.stop()
 
 if not result.mails:
-    st.warning("Es wurden keine gueltigen Sponsoren mit Empfaenger-E-Mail gefunden.")
+    st.warning("In der Datei wurden keine Sponsoren mit E-Mail-Adresse gefunden.")
     st.stop()
 
 _ensure_summary_state(result)
@@ -368,7 +403,7 @@ default_preview_label = next(
 with preview_col:
     st.subheader("Vorschau")
     preview_label = st.selectbox(
-        "Sponsor auswaehlen",
+        "Sponsor auswählen",
         options=labels,
         index=labels.index(default_preview_label),
     )
@@ -377,61 +412,65 @@ with preview_col:
 
     preview_mail = mail_by_number[preview_mail_number]
     st.markdown(f"**Betreff:** {preview_mail.subject}")
-    st.markdown(f"**To:** `{preview_mail.to_email}`")
-    st.markdown(f"**CC:** `{preview_mail.cc_email or '-'}`")
+    st.markdown(f"**E-Mail:** `{preview_mail.to_email}`")
+    st.markdown(f"**Kopie:** `{preview_mail.cc_email or '-'}`")
 
 with details_col:
-    st.subheader("HTML-Vorschau")
+    st.subheader("Vorschau der E-Mail")
     components.html(preview_mail.html_body, height=780, scrolling=True)
 
 st.divider()
-st.subheader("IMAP Drafts")
+st.subheader("Entwürfe im Postfach")
 
 selected_mails = [
     mail_by_number[mail_number]
     for mail_number in sorted(selected_mail_numbers)
     if mail_number in mail_by_number
 ]
-st.caption("Die Draft-Erstellung verarbeitet nur die aktuell in der Tabelle ausgewaehlten Sponsoren.")
+st.caption("Es werden nur die aktuell ausgewählten Sponsoren berücksichtigt.")
+imap_username = imap_username.strip()
 
-if not drafts_folder.strip():
-    st.warning("Bitte einen gueltigen Drafts-Ordner angeben.")
+if not imap_username:
+    st.warning("Bitte gib Deine E-Mail-Adresse ein.")
+elif not imap_password:
+    st.warning("Bitte gib Dein E-Mail-Passwort ein.")
+elif not drafts_folder.strip():
+    st.warning("Bitte gib einen gültigen Ordner für Entwürfe an.")
 elif not selected_mails:
-    st.warning("Bitte mindestens einen Sponsor in der Tabelle auswaehlen.")
+    st.warning("Bitte mindestens einen Sponsor in der Tabelle auswählen.")
 else:
     st.info(
-        "Die Entwuerfe werden per IMAP im Ordner "
-        f"`{drafts_folder.strip()}` des Postfachs `{base_imap_config.username}` angelegt."
+        "Die Entwürfe werden im Ordner "
+        f"`{drafts_folder.strip()}` in Deinem Postfach gespeichert."
     )
-    if st.button("Ausgewaehlte Drafts im Postfach anlegen", type="primary", use_container_width=True):
+    if st.button("Ausgewählte Entwürfe speichern", type="primary", use_container_width=True):
         try:
             records = create_imap_drafts(
                 selected_mails,
                 ImapDraftConfig(
                     host=base_imap_config.host,
                     port=base_imap_config.port,
-                    username=base_imap_config.username,
-                    password=base_imap_config.password,
+                    username=imap_username,
+                    password=imap_password,
                     drafts_folder=drafts_folder.strip(),
-                    from_address=base_imap_config.from_address,
                     use_ssl=base_imap_config.use_ssl,
                 ),
             )
         except Exception as exc:
-            st.error(f"Draft-Erstellung fehlgeschlagen: {exc}")
+            st.error(f"Die Entwürfe konnten nicht gespeichert werden: {exc}")
         else:
             st.session_state["sdm_imap_log_records"] = records
             success_count = sum(record.result == "draft_created" for record in records)
             error_count = sum(record.result == "error" for record in records)
             if error_count:
-                st.warning(f"Entwuerfe erstellt: {success_count}, Fehler: {error_count}")
+                st.warning(f"Entwürfe gespeichert: {success_count}, Fehler: {error_count}")
             else:
-                st.success(f"Entwuerfe erstellt: {success_count}")
+                st.success(f"Entwürfe gespeichert: {success_count}")
 
 imap_log_records = st.session_state.get("sdm_imap_log_records")
 if imap_log_records:
     st.divider()
-    st.subheader("Draft-Protokoll")
+    st.subheader("Ergebnis")
     st.dataframe(
         build_imap_draft_log_dataframe(imap_log_records),
         use_container_width=True,

@@ -63,17 +63,20 @@ COLOR_TEXT = {
     "white": "#333333",
 }
 STATUS_LABEL_DE = {
-    "green": "Gruen - bereits erhalten",
-    "red": "Rot - Handlungsbedarf",
-    "yellow": "Gelb - ausstehend",
-    "white": "Ohne Markierung",
+    "green": "Bereits erhalten",
+    "red": "Handlungsbedarf",
+    "yellow": "Ausstehend",
+    "white": "Zu empfehlen",
 }
 STATUS_LABEL_EN = {
-    "green": "Green - already received",
-    "red": "Red - action required",
-    "yellow": "Yellow - pending",
-    "white": "No highlight",
+    "green": "Already received",
+    "red": "Action required",
+    "yellow": "Pending",
+    "white": "Highly recommended",
 }
+HTML_FONT_FAMILY = "Calibri, Arial, Helvetica, sans-serif"
+HTML_FONT_SIZE = "11pt"
+HTML_BASE_STYLE = f"font-family:{HTML_FONT_FAMILY}; font-size:{HTML_FONT_SIZE};"
 SUMMARY_FIELDNAMES = [
     "row_number",
     "sponsor_name",
@@ -265,14 +268,14 @@ def build_deadlines(ws, sponsor: SponsorRow) -> list[DeadlineItem]:
         DeadlineItem(
             due_date_de="ASAP",
             due_date_en="ASAP",
-            text_de="Sende deine Target Account Liste, damit wir diese zu dem Event einladen koennen (Wunschteilnehmer).",
+            text_de="Sende deine Target Account Liste, damit wir diese zu dem Event einladen können (Wunschteilnehmer).",
             text_en="Send your target account list so that we can invite them to the event (preferred attendees).",
             status=status_from_column(ws, sponsor.row_number, STATUS_COLS["target_accounts"]),
         ),
         DeadlineItem(
             due_date_de="ASAP",
             due_date_en="ASAP",
-            text_de="Poste das individuelle Visual zur Veranstaltung auf LinkedIn; gerne unterstuetze ich bei der Erstellung.",
+            text_de="Poste das individuelle Visual zur Veranstaltung auf LinkedIn; gerne unterstütze ich bei der Erstellung.",
             text_en="Post the individual event visual on LinkedIn; I am happy to support you with its creation.",
             status=status_from_column(ws, sponsor.row_number, STATUS_COLS["posting_published"]),
         ),
@@ -293,7 +296,7 @@ def build_deadlines(ws, sponsor: SponsorRow) -> list[DeadlineItem]:
         DeadlineItem(
             due_date_de="26.03.2026",
             due_date_en="26/03/2026",
-            text_de="Sende die Informationen fuer das Booklet.",
+            text_de="Sende die Informationen für das Booklet.",
             text_en="Send the information for the booklet.",
             status=status_from_column(ws, sponsor.row_number, STATUS_COLS["booklet"]),
         ),
@@ -321,7 +324,7 @@ def build_deadlines(ws, sponsor: SponsorRow) -> list[DeadlineItem]:
         DeadlineItem(
             due_date_de="20.04.2026",
             due_date_en="20/04/2026",
-            text_de="Sende als Gold- oder Platin-Sponsor die Vortragspraesentation.",
+            text_de="Sende als Gold- oder Platin-Sponsor die Vortragspräsentation.",
             text_en="As a Gold or Platinum sponsor, send your presentation slides.",
             status=presentation_status,
         ),
@@ -335,7 +338,7 @@ def build_deadlines(ws, sponsor: SponsorRow) -> list[DeadlineItem]:
         DeadlineItem(
             due_date_de="27.04.2026",
             due_date_en="27/04/2026",
-            text_de="Sende Severin die Auswahl der Gespraechswuensche auf Basis der Kontaktdatenliste (vom 20.04.2026) fuer eine optimale Vorbereitung der Meetings.",
+            text_de="Sende Severin die Auswahl der Gesprächswünsche auf Basis der Kontaktdatenliste (vom 20.04.2026) für eine optimale Vorbereitung der Meetings.",
             text_en="Send Severin your preferred meeting selections based on the contact details list (from 20/04/2026) for optimal meeting preparation.",
             status="yellow",
         ),
@@ -357,7 +360,7 @@ def parse_event_date(value: date | str) -> date:
             return datetime.strptime(text, fmt).date()
         except ValueError:
             continue
-    raise ValueError(f"Ungueltiges Datum: {value}")
+    raise ValueError(f"Ungültiges Datum: {value}")
 
 
 def format_event_date(value: date, language: str) -> str:
@@ -387,12 +390,12 @@ def build_intro(
     else:
         salutation = f"Hallo {html.escape(salutation_name)}," if salutation_name else "Hallo,"
         intro = (
-            "heute sende ich Dir einen Reminder fuer die anstehenden Deadlines des mysecurityevent in "
+            "heute sende ich Dir einen Reminder für die anstehenden Deadlines des mysecurityevent in "
             f"{html.escape(event_city)} vom {html.escape(start_text)} bis zum {html.escape(end_text)}."
         )
         explainer = (
-            "Du findest hier eine Uebersicht aller Unterlagen, die ich in der Eventvorbereitung noch von Dir benoetige. "
-            "Bitte beachte unbedingt die entsprechenden Deadlines fuer eine optimale Vorbereitung und ein erfolgreiches Event."
+            "Du findest hier eine Übersicht aller Unterlagen, die ich in der Eventvorbereitung noch von Dir benötige. "
+            "Bitte beachte unbedingt die entsprechenden Deadlines für eine optimale Vorbereitung und ein erfolgreiches Event."
         )
 
     return salutation, intro, explainer
@@ -404,12 +407,14 @@ def legend_html(language: str) -> str:
             "All items marked in green require no further action, as the necessary information or documents have already been received.",
             "All items marked in red require your action.",
             "Items marked in yellow are still pending and will become relevant in the coming weeks.",
+            "Items marked in white are highly recommended for optimal event preparation.",
         ]
     else:
         lines = [
-            "Bei allen gruen markierten Punkten besteht kein Handlungsbedarf, da wir die Informationen bzw. Unterlagen bereits erhalten haben.",
+            "Bei allen grün markierten Punkten besteht kein Handlungsbedarf, da wir die Informationen bzw. Unterlagen bereits erhalten haben.",
             "Bei allen rot markierten Punkten besteht Handlungsbedarf Deinerseits.",
             "Alle gelb markierten Punkte sind noch ausstehend und werden in den kommenden Wochen relevant.",
+            "Alle weiß markierten Punkte sind für eine optimale Eventvorbereitung zu empfehlen.",
         ]
     return "".join(f"<li>{html.escape(line)}</li>" for line in lines)
 
@@ -423,10 +428,10 @@ def render_deadline_rows(items: Iterable[DeadlineItem], language: str) -> str:
         rows.append(
             f"""
             <tr>
-                <td style="padding:10px 12px; border:1px solid #d9d9d9; vertical-align:top; white-space:nowrap;"><strong>{html.escape(due_date)}</strong></td>
-                <td style="padding:10px 12px; border:1px solid #d9d9d9; vertical-align:top;">{html.escape(text)}</td>
-                <td style="padding:10px 12px; border:1px solid #d9d9d9; vertical-align:top;">
-                    <span style="display:inline-block; padding:4px 10px; border-radius:999px; border:1px solid {COLOR_BORDER[item.status]}; background:{COLOR_BG[item.status]}; color:{COLOR_TEXT[item.status]}; font-weight:600;">
+                <td style="{HTML_BASE_STYLE} padding:10px 12px; border:1px solid #d9d9d9; vertical-align:top; white-space:nowrap;"><strong>{html.escape(due_date)}</strong></td>
+                <td style="{HTML_BASE_STYLE} padding:10px 12px; border:1px solid #d9d9d9; vertical-align:top;">{html.escape(text)}</td>
+                <td style="{HTML_BASE_STYLE} padding:10px 12px; border:1px solid #d9d9d9; vertical-align:top;">
+                    <span style="{HTML_BASE_STYLE} display:inline-block; padding:4px 10px; border-radius:999px; border:1px solid {COLOR_BORDER[item.status]}; background:{COLOR_BG[item.status]}; color:{COLOR_TEXT[item.status]}; font-weight:600;">
                         {html.escape(status_label)}
                     </span>
                 </td>
@@ -445,7 +450,12 @@ def build_html_body(
 ) -> str:
     salutation, intro, explainer = build_intro(sponsor, event_city, event_start, event_end)
     overview_head = "Deadline Overview" if sponsor.language == "EN" else "Deadlines auf einen Blick"
-    footer = "Best regards," if sponsor.language == "EN" else "Beste Gruesse,"
+    closing_note = (
+        "Please feel free to contact me if you have any questions or comments regarding the deadlines."
+        if sponsor.language == "EN"
+        else "Melde Dich gerne bei mir, solltest Du zu den Deadlines Fragen oder Anmerkungen haben."
+    )
+    footer = "Best regards," if sponsor.language == "EN" else "Beste Grüße,"
 
     return f"""
 <!DOCTYPE html>
@@ -454,27 +464,28 @@ def build_html_body(
   <meta charset="utf-8">
   <title>{html.escape(build_subject(sponsor.language, sponsor.sponsor_name))}</title>
 </head>
-<body style="font-family: Arial, Helvetica, sans-serif; color:#222; line-height:1.5;">
-  <p>{salutation}</p>
-  <p>{intro}</p>
-  <p>{explainer}</p>
-  <ul>
+<body style="{HTML_BASE_STYLE} color:#222; line-height:1.5;">
+  <p style="{HTML_BASE_STYLE} margin:0 0 12px 0;">{salutation}</p>
+  <p style="{HTML_BASE_STYLE} margin:0 0 12px 0;">{intro}</p>
+  <p style="{HTML_BASE_STYLE} margin:0 0 12px 0;">{explainer}</p>
+  <ul style="{HTML_BASE_STYLE} margin:0 0 12px 20px; padding:0;">
     {legend_html(sponsor.language)}
   </ul>
-  <p><strong>{html.escape(overview_head)}</strong></p>
-  <table style="border-collapse:collapse; width:100%; max-width:1100px;">
+  <p style="{HTML_BASE_STYLE} margin:0 0 12px 0;"><strong>{html.escape(overview_head)}</strong></p>
+  <table style="{HTML_BASE_STYLE} border-collapse:collapse; width:100%; max-width:1100px;">
     <thead>
       <tr>
-        <th style="padding:10px 12px; border:1px solid #d9d9d9; background:#f3f3f3; text-align:left;">Deadline</th>
-        <th style="padding:10px 12px; border:1px solid #d9d9d9; background:#f3f3f3; text-align:left;">{'Task' if sponsor.language == 'EN' else 'Aufgabe'}</th>
-        <th style="padding:10px 12px; border:1px solid #d9d9d9; background:#f3f3f3; text-align:left;">Status</th>
+        <th style="{HTML_BASE_STYLE} padding:10px 12px; border:1px solid #d9d9d9; background:#f3f3f3; text-align:left;">Deadline</th>
+        <th style="{HTML_BASE_STYLE} padding:10px 12px; border:1px solid #d9d9d9; background:#f3f3f3; text-align:left;">{'Task' if sponsor.language == 'EN' else 'Aufgabe'}</th>
+        <th style="{HTML_BASE_STYLE} padding:10px 12px; border:1px solid #d9d9d9; background:#f3f3f3; text-align:left;">Status</th>
       </tr>
     </thead>
     <tbody>
       {render_deadline_rows(items, sponsor.language)}
     </tbody>
   </table>
-  <p>{html.escape(footer)}</p>
+  <p style="{HTML_BASE_STYLE} margin:12px 0 12px 0;">{html.escape(closing_note)}</p>
+  <p style="{HTML_BASE_STYLE} margin:0;">{html.escape(footer)}</p>
 </body>
 </html>
 """.strip()
@@ -520,7 +531,7 @@ def generate_deadline_mails(
     try:
         if sheet_name not in workbook.sheetnames:
             raise ValueError(
-                f"Blatt '{sheet_name}' nicht gefunden. Verfuegbar: {', '.join(workbook.sheetnames)}"
+                f"Blatt '{sheet_name}' nicht gefunden. Verfügbar: {', '.join(workbook.sheetnames)}"
             )
 
         ws = workbook[sheet_name]

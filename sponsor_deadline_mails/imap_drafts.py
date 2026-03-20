@@ -21,7 +21,6 @@ class ImapDraftConfig:
     username: str
     password: str
     drafts_folder: str = "Drafts"
-    from_address: str = ""
     use_ssl: bool = True
 
 
@@ -51,7 +50,7 @@ def _html_to_plain_text(html_body: str) -> str:
 def _build_message(mail: GeneratedMail, config: ImapDraftConfig) -> bytes:
     message = EmailMessage()
     message["Subject"] = mail.subject
-    message["From"] = config.from_address or config.username
+    message["From"] = config.username
     message["To"] = mail.to_email
     if mail.cc_email:
         message["Cc"] = mail.cc_email
@@ -73,13 +72,13 @@ def create_imap_drafts(
     config: ImapDraftConfig,
 ) -> list[ImapDraftRecord]:
     if not config.host.strip():
-        raise ValueError("IMAP host darf nicht leer sein")
+        raise ValueError("Der Postfach-Server darf nicht leer sein.")
     if not config.username.strip():
-        raise ValueError("IMAP username darf nicht leer sein")
+        raise ValueError("Die E-Mail-Adresse darf nicht leer sein.")
     if not config.password:
-        raise ValueError("IMAP password darf nicht leer sein")
+        raise ValueError("Das E-Mail-Passwort darf nicht leer sein.")
     if not config.drafts_folder.strip():
-        raise ValueError("drafts_folder darf nicht leer sein")
+        raise ValueError("Der Ordner für Entwürfe darf nicht leer sein.")
 
     connection = _connect(config)
     records: list[ImapDraftRecord] = []
@@ -87,12 +86,12 @@ def create_imap_drafts(
     try:
         login_status, login_data = connection.login(config.username, config.password)
         if login_status != "OK":
-            raise RuntimeError(f"IMAP login fehlgeschlagen: {login_data}")
+            raise RuntimeError(f"Die Anmeldung am Postfach ist fehlgeschlagen: {login_data}")
 
         select_status, select_data = connection.select(config.drafts_folder)
         if select_status != "OK":
             raise RuntimeError(
-                f"Drafts-Ordner '{config.drafts_folder}' konnte nicht geoeffnet werden: {select_data}"
+                f"Der Ordner '{config.drafts_folder}' konnte im Postfach nicht geöffnet werden: {select_data}"
             )
 
         for mail in mails:
@@ -150,16 +149,19 @@ def create_imap_drafts(
 
 
 def build_imap_draft_log_dataframe(records: list[ImapDraftRecord]) -> pd.DataFrame:
+    result_labels = {
+        "draft_created": "Gespeichert",
+        "error": "Fehler",
+    }
     rows = [
         {
             "Sponsor": record.sponsor_name,
-            "To": record.to_email,
-            "CC": record.cc_email,
+            "E-Mail": record.to_email,
+            "Kopie": record.cc_email,
             "Postfach": record.mailbox,
             "Ordner": record.drafts_folder,
-            "Ergebnis": record.result,
-            "Details": record.details,
-            "Server-Antwort": record.server_response,
+            "Ergebnis": result_labels.get(record.result, record.result),
+            "Hinweis": record.details or record.server_response,
         }
         for record in records
     ]
@@ -167,12 +169,11 @@ def build_imap_draft_log_dataframe(records: list[ImapDraftRecord]) -> pd.DataFra
         rows,
         columns=[
             "Sponsor",
-            "To",
-            "CC",
+            "E-Mail",
+            "Kopie",
             "Postfach",
             "Ordner",
             "Ergebnis",
-            "Details",
-            "Server-Antwort",
+            "Hinweis",
         ],
     )
