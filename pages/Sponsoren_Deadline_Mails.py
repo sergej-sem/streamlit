@@ -376,33 +376,19 @@ mail_by_number = {
     mail_number: mail
     for mail_number, mail in enumerate(result.mails, start=1)
 }
-label_to_mail_number = {
-    _mail_label(mail_number, mail): mail_number
-    for mail_number, mail in mail_by_number.items()
-}
-labels = list(label_to_mail_number.keys())
+preview_options = list(mail_by_number.keys())
 default_preview_mail_number = st.session_state.get("sdm_preview_mail_number")
-if default_preview_mail_number not in mail_by_number:
-    default_preview_mail_number = 1
-    st.session_state["sdm_preview_mail_number"] = default_preview_mail_number
-default_preview_label = next(
-    (
-        label
-        for label, mail_number in label_to_mail_number.items()
-        if mail_number == default_preview_mail_number
-    ),
-    labels[0],
-)
+if default_preview_mail_number not in mail_by_number and preview_options:
+    st.session_state["sdm_preview_mail_number"] = preview_options[0]
 
 with preview_col:
     st.subheader("Vorschau")
-    preview_label = st.selectbox(
+    preview_mail_number = st.selectbox(
         "Sponsor auswählen",
-        options=labels,
-        index=labels.index(default_preview_label),
+        options=preview_options,
+        key="sdm_preview_mail_number",
+        format_func=lambda mail_number: _mail_label(mail_number, mail_by_number[mail_number]),
     )
-    preview_mail_number = label_to_mail_number[preview_label]
-    st.session_state["sdm_preview_mail_number"] = preview_mail_number
 
     preview_mail = mail_by_number[preview_mail_number]
     st.markdown(f"**Betreff:** {preview_mail.subject}")
