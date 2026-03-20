@@ -72,7 +72,7 @@ STATUS_LABEL_EN = {
     "green": "Already received",
     "red": "Action required",
     "yellow": "Pending",
-    "white": "Highly recommended",
+    "white": "Recommended",
 }
 HTML_FONT_FAMILY = "Calibri, Arial, Helvetica, sans-serif"
 HTML_FONT_SIZE = "11pt"
@@ -183,6 +183,10 @@ def is_talk_package(package: str) -> bool:
     return package.strip().lower() in TALK_PACKAGES
 
 
+def is_premium_package(package: str) -> bool:
+    return "premium" in package.strip().lower()
+
+
 def cell_value(ws, col: str, row: int) -> object:
     return ws[f"{col}{row}"].value
 
@@ -239,6 +243,7 @@ def status_from_column(ws, row: int, col: str) -> str:
 
 def build_deadlines(ws, sponsor: SponsorRow) -> list[DeadlineItem]:
     talk_relevant = is_talk_package(sponsor.package)
+    premium_package = is_premium_package(sponsor.package)
     talk_info_status = (
         status_from_column(ws, sponsor.row_number, STATUS_COLS["talk_info"])
         if talk_relevant
@@ -250,7 +255,7 @@ def build_deadlines(ws, sponsor: SponsorRow) -> list[DeadlineItem]:
         else "white"
     )
 
-    return [
+    items = [
         DeadlineItem(
             due_date_de="ASAP",
             due_date_en="ASAP",
@@ -310,8 +315,8 @@ def build_deadlines(ws, sponsor: SponsorRow) -> list[DeadlineItem]:
         DeadlineItem(
             due_date_de="26.03.2026",
             due_date_en="26/03/2026",
-            text_de="Sende als Gold- oder Platin-Sponsor die Vortragsinformationen.",
-            text_en="As a Gold or Platinum sponsor, send your talk information.",
+            text_de="Sende uns die Vortragsinformationen zu.",
+            text_en="Send us the talk information.",
             status=talk_info_status,
         ),
         DeadlineItem(
@@ -324,8 +329,8 @@ def build_deadlines(ws, sponsor: SponsorRow) -> list[DeadlineItem]:
         DeadlineItem(
             due_date_de="20.04.2026",
             due_date_en="20/04/2026",
-            text_de="Sende als Gold- oder Platin-Sponsor die Vortragspräsentation.",
-            text_en="As a Gold or Platinum sponsor, send your presentation slides.",
+            text_de="Sende uns die Vortragspräsentation zu.",
+            text_en="Send us the presentation slides.",
             status=presentation_status,
         ),
         DeadlineItem(
@@ -343,6 +348,28 @@ def build_deadlines(ws, sponsor: SponsorRow) -> list[DeadlineItem]:
             status="yellow",
         ),
     ]
+
+    if premium_package:
+        excluded_tasks = {
+            "Sende uns die Vortragsinformationen zu.",
+            "Sende uns die Vortragspräsentation zu.",
+            "Send us the talk information.",
+            "Send us the presentation slides.",
+        }
+        return [
+            item
+            for item in items
+            if item.text_de not in excluded_tasks and item.text_en not in excluded_tasks
+        ]
+
+    return items
+
+
+def _colored_status_word(word: str, status: str) -> str:
+    return (
+        f'<span style="{HTML_BASE_STYLE} color:{COLOR_TEXT[status]}; font-weight:700;">'
+        f"{html.escape(word)}</span>"
+    )
 
 
 def build_subject(language: str, sponsor_name: str) -> str:
@@ -404,19 +431,31 @@ def build_intro(
 def legend_html(language: str) -> str:
     if language == "EN":
         lines = [
-            "All items marked in green require no further action, as the necessary information or documents have already been received.",
-            "All items marked in red require your action.",
-            "Items marked in yellow are still pending and will become relevant in the coming weeks.",
-            "Items marked in white are highly recommended for optimal event preparation.",
+            (
+                f'All items marked in {_colored_status_word("green", "green")} require no further action, '
+                "as the necessary information or documents have already been received."
+            ),
+            f'All items marked in {_colored_status_word("red", "red")} require your action.',
+            (
+                f'Items marked in {_colored_status_word("yellow", "yellow")} are still pending '
+                "and will become relevant in the coming weeks."
+            ),
+            "Items marked in white are recommended for optimal event preparation.",
         ]
     else:
         lines = [
-            "Bei allen grün markierten Punkten besteht kein Handlungsbedarf, da wir die Informationen bzw. Unterlagen bereits erhalten haben.",
-            "Bei allen rot markierten Punkten besteht Handlungsbedarf Deinerseits.",
-            "Alle gelb markierten Punkte sind noch ausstehend und werden in den kommenden Wochen relevant.",
+            (
+                f'Bei allen {_colored_status_word("grün", "green")} markierten Punkten besteht kein Handlungsbedarf, '
+                "da wir die Informationen bzw. Unterlagen bereits erhalten haben."
+            ),
+            f'Bei allen {_colored_status_word("rot", "red")} markierten Punkten besteht Handlungsbedarf Deinerseits.',
+            (
+                f'Alle {_colored_status_word("gelb", "yellow")} markierten Punkte sind noch ausstehend '
+                "und werden in den kommenden Wochen relevant."
+            ),
             "Alle weiß markierten Punkte sind für eine optimale Eventvorbereitung zu empfehlen.",
         ]
-    return "".join(f"<li>{html.escape(line)}</li>" for line in lines)
+    return "".join(f"<li>{line}</li>" for line in lines)
 
 
 def render_deadline_rows(items: Iterable[DeadlineItem], language: str) -> str:

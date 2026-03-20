@@ -324,12 +324,6 @@ with imap_col:
         type="password",
         help="Das Passwort für dieses Postfach.",
     )
-    drafts_folder = st.text_input(
-        "Ordner für Entwürfe",
-        value=base_imap_config.drafts_folder,
-        help="Diesen Wert bitte normalerweise nicht ändern. Nur anpassen, wenn Deine Entwürfe in einem anderen Ordner gespeichert werden.",
-    )
-    st.caption("Die Verbindung zum Postfach ist bereits eingerichtet.")
     st.markdown("<div style='margin-top: 1.7rem'></div>", unsafe_allow_html=True)
     generate_clicked = st.button("Generieren", type="primary", use_container_width=True)
 
@@ -429,20 +423,18 @@ selected_mails = [
 ]
 st.caption("Es werden nur die aktuell ausgewählten Sponsoren berücksichtigt.")
 imap_username = imap_username.strip()
+drafts_folder = base_imap_config.drafts_folder.strip()
 
 if not imap_username:
     st.warning("Bitte gib Deine E-Mail-Adresse ein.")
 elif not imap_password:
     st.warning("Bitte gib Dein E-Mail-Passwort ein.")
 elif not drafts_folder.strip():
-    st.warning("Bitte gib einen gültigen Ordner für Entwürfe an.")
+    st.error("Der Ordner für Entwürfe ist aktuell nicht richtig eingerichtet. Bitte lass die Konfiguration prüfen.")
 elif not selected_mails:
     st.warning("Bitte mindestens einen Sponsor in der Tabelle auswählen.")
 else:
-    st.info(
-        "Die Entwürfe werden im Ordner "
-        f"`{drafts_folder.strip()}` in Deinem Postfach gespeichert."
-    )
+    st.info("Die Entwürfe werden in Deinem Postfach gespeichert.")
     if st.button("Ausgewählte Entwürfe speichern", type="primary", use_container_width=True):
         try:
             records = create_imap_drafts(
@@ -452,7 +444,7 @@ else:
                     port=base_imap_config.port,
                     username=imap_username,
                     password=imap_password,
-                    drafts_folder=drafts_folder.strip(),
+                    drafts_folder=drafts_folder,
                     use_ssl=base_imap_config.use_ssl,
                 ),
             )
