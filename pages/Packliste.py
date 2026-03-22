@@ -358,6 +358,11 @@ def save_df(df: pd.DataFrame, path: str) -> None:
                 else:
                     val = val if val != "" else None
                 ws.cell(row=xl_row, column=xl_col, value=val)
+        first_clear_row = data_start_row + len(df)
+        if first_clear_row <= ws.max_row:
+            for xl_row in range(first_clear_row, ws.max_row + 1):
+                for xl_col in set(col_map.values()):
+                    ws.cell(row=xl_row, column=xl_col, value=None)
         wb.save(str(tmp))
         tmp.replace(p)
     except Exception:
@@ -472,6 +477,24 @@ def _render_excel_download(
     )
 
 
+def _build_editor_mode_column_config(df: pd.DataFrame) -> dict[str, object]:
+    known_text = {
+        "Bereich": _cc_text("Bereich", width="small"),
+        "Gegenstand": _cc_text("Gegenstand", width="medium"),
+        "Beschreibung": _cc_text("Beschreibung", width="large"),
+        "Menge": _cc_text("Menge", width="small"),
+        "Kategorie": _cc_text("Kategorie", width="small"),
+        "Notizen": _cc_text("Notizen", width="large"),
+    }
+    cfg: dict[str, object] = {}
+    for col in df.columns:
+        if col in CHECKBOX_COLS or col == "Verladen":
+            cfg[col] = _cc_check(str(col))
+        else:
+            cfg[col] = known_text.get(str(col), _cc_text(str(col), width="medium"))
+    return cfg
+
+
 def _table_height_for_rows(
     row_count: int,
     *,
@@ -482,6 +505,41 @@ def _table_height_for_rows(
 ) -> int:
     visible_rows = min(max(row_count, 1), max_rows)
     return header_px + visible_rows * row_px
+
+
+def _normalize_editor_mode_df(
+    df: pd.DataFrame,
+    columns: pd.Index,
+) -> pd.DataFrame:
+    normalized = df.copy().reindex(columns=columns)
+    checkbox_cols = [col for col in normalized.columns if col in CHECKBOX_COLS or col == "Verladen"]
+
+    for col in normalized.columns:
+        if col in checkbox_cols:
+            normalized[col] = normalized[col].fillna(False).astype(bool)
+        else:
+            normalized[col] = normalized[col].where(normalized[col].notna(), "")
+
+    return normalized.reset_index(drop=True)
+
+
+def _drop_fully_empty_editor_rows(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return df.reset_index(drop=True)
+
+    checkbox_cols = [col for col in df.columns if col in CHECKBOX_COLS or col == "Verladen"]
+    text_cols = [col for col in df.columns if col not in checkbox_cols]
+
+    keep_mask = pd.Series(False, index=df.index)
+    if text_cols:
+        keep_mask = df[text_cols].apply(
+            lambda row: any(bool(pd.notna(v) and str(v).strip()) for v in row),
+            axis=1,
+        )
+    if checkbox_cols:
+        keep_mask = keep_mask | df[checkbox_cols].fillna(False).astype(bool).any(axis=1)
+
+    return df.loc[keep_mask].reset_index(drop=True)
 
 
 def _build_overview_stats(
@@ -986,6 +1044,45 @@ if msg := st.session_state.pop("_al_msg", None):
     st.info(msg)
 if err := st.session_state.pop("_al_err", None):
     st.error(f"Fehler beim Auto-Laden: {err}")
+
+
+if st.session_state.get("pl_df") is not None:
+    editor_source = st.session_state["pl_df"].reset_index(drop=True)
+    with st.expander("✏️ Editor-Modus", expanded=False):
+        st.caption(
+            "Nur hier koennen Zeilen hinzugefuegt oder entfernt werden. "
+            "Aenderungen werden erst nach 'Aenderungen uebernehmen' aktiv; "
+            "Undo bleibt global verfuegbar."
+        )
+        with st.form("pl_editor_mode_form"):
+            editor_df = st.data_editor(
+                editor_source,
+                key=f"pl_editor_mode_table_{st.session_state['pl_version']}",
+                use_container_width=True,
+                hide_index=True,
+                num_rows="dynamic",
+                height=_table_height_for_rows(len(editor_source), min_rows=1, max_rows=18),
+                column_config=_build_editor_mode_column_config(editor_source),
+            )
+            apply_editor_changes = st.form_submit_button(
+                "Aenderungen uebernehmen",
+                type="primary",
+            )
+
+        if apply_editor_changes:
+            current_df = st.session_state["pl_df"].reset_index(drop=True)
+            edited_df = _normalize_editor_mode_df(editor_df, current_df.columns)
+            edited_df = _drop_fully_empty_editor_rows(edited_df)
+            current_norm = _normalize_editor_mode_df(current_df, current_df.columns)
+
+            if edited_df.equals(current_norm):
+                st.info("Keine Aenderungen zum Uebernehmen.")
+            else:
+                _push_history()
+                st.session_state["pl_df"] = edited_df
+                st.session_state["pl_version"] += 1
+                _auto_save()
+                st.rerun()
 
 
 # ── File loader ────────────────────────────────────────────────────────────────
