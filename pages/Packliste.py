@@ -458,6 +458,8 @@ def _render_excel_download(
     key: str,
     label: str = "Liste als Excel herunterladen",
     sheet_name: str = "Liste",
+    use_container_width: bool = False,
+    help: str | None = None,
 ) -> None:
     st.download_button(
         label,
@@ -465,7 +467,21 @@ def _render_excel_download(
         file_name=_download_filename(slug),
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         key=key,
+        use_container_width=use_container_width,
+        help=help,
     )
+
+
+def _table_height_for_rows(
+    row_count: int,
+    *,
+    min_rows: int,
+    max_rows: int,
+    header_px: int = 38,
+    row_px: int = 35,
+) -> int:
+    visible_rows = min(max(row_count, 1), max_rows)
+    return header_px + visible_rows * row_px
 
 
 def _build_overview_stats(
@@ -620,6 +636,7 @@ def _render_overview_stats_df(
         view,
         use_container_width=True,
         hide_index=True,
+        height=_table_height_for_rows(len(view), min_rows=4, max_rows=10),
         column_config={
             "Bereich": st.column_config.TextColumn("Bereich", width="medium"),
             value_label: _cc_number_left(value_label, fmt="%d"),
@@ -888,14 +905,14 @@ apply_page_title_style()
 
 hist_len = len(st.session_state.get("pl_history", []))
 redo_len = len(st.session_state.get("pl_redo_stack", []))
-title_col, btn_col = st.columns([7, 2])
+title_col, btn_col = st.columns([6, 4])
 
 with title_col:
     st.markdown(page_title_html("Packliste"), unsafe_allow_html=True)
 
 with btn_col:
     st.markdown("<div style='margin-top:1.1rem'></div>", unsafe_allow_html=True)
-    save_col, undo_col, redo_col = st.columns(3)
+    save_col, undo_col, redo_col, export_col = st.columns(4)
     with save_col:
         if st.button("💾", use_container_width=True, key="save_status_btn",
                      help="Speichern"):
@@ -944,6 +961,18 @@ with btn_col:
             st.session_state["pl_version"] += 1
             _auto_save()
             st.rerun()
+
+    with export_col:
+        if st.session_state.get("pl_df") is not None:
+            _render_excel_download(
+                st.session_state["pl_df"],
+                slug="gesamt",
+                key="dl_gesamt",
+                label="Notfall-Export",
+                sheet_name="Packliste",
+                use_container_width=True,
+                help="Gesamten aktuellen Arbeitsstand als Excel exportieren",
+            )
 
 # Fehler-Meldungen unterhalb des Headers, volle Breite
 if st.session_state.get("pl_sidecar_err"):
@@ -1044,16 +1073,10 @@ def _frag_packen() -> None:
         st.data_editor(
             base_r, key=ek_r, use_container_width=True,
             hide_index=True, num_rows="fixed",
+            height=_table_height_for_rows(len(base_r), min_rows=6, max_rows=14),
             on_change=_make_callback(ek_r, base_r),
             column_config={k: v for k, v in pcfg.items() if k in cr},
         )
-    _render_excel_download(
-        view_r,
-        slug="jetzt_reinigen_und_packen",
-        key=f"dl_rein_{ver}",
-        sheet_name="Jetzt reinigen",
-    )
-
     st.divider()
 
     # ── Jetzt packen ──────────────────────────────────────────────────────────
@@ -1072,21 +1095,15 @@ def _frag_packen() -> None:
         st.data_editor(
             base_n, key=ek_n, use_container_width=True,
             hide_index=True, num_rows="fixed",
+            height=_table_height_for_rows(len(base_n), min_rows=6, max_rows=14),
             on_change=_make_callback(ek_n, base_n),
             column_config={k: v for k, v in pcfg.items() if k in cn},
         )
-    _render_excel_download(
-        view_n,
-        slug="jetzt_packen_verbrauchsgegenstaende",
-        key=f"dl_nach_{ver}",
-        sheet_name="Jetzt packen",
-    )
-
     st.divider()
 
     # ── Kurz vor Event packen ──────────────────────────────────────────────────
     st.subheader("Kurz vor Event packen")
-    ce     = ["Bereich", "Gegenstand", "Menge", "Kategorie"]
+    ce     = ["Bereich", "Gegenstand", "Menge", "Kategorie", "Verpackt"]
     bk_e   = f"b_event_{ver}"
     view_e = df.loc[df["kurz vor Event packen"].astype(bool), ce].sort_values("Bereich")
     base_e = _get_frozen_base(
@@ -1100,16 +1117,10 @@ def _frag_packen() -> None:
         st.data_editor(
             base_e, key=ek_e, use_container_width=True,
             hide_index=True, num_rows="fixed",
+            height=_table_height_for_rows(len(base_e), min_rows=6, max_rows=14),
             on_change=_make_callback(ek_e, base_e),
             column_config={k: v for k, v in pcfg.items() if k in ce},
         )
-    _render_excel_download(
-        view_e,
-        slug="kurz_vor_event_packen",
-        key=f"dl_event_{ver}",
-        sheet_name="Kurz vor Event",
-    )
-
 
 @st.fragment
 def _frag_verladen() -> None:
@@ -1128,6 +1139,7 @@ def _frag_verladen() -> None:
     st.data_editor(
         base_v, key=ek_v, use_container_width=True,
         hide_index=True, num_rows="fixed",
+        height=_table_height_for_rows(len(base_v), min_rows=6, max_rows=14),
         on_change=_make_callback(ek_v, base_v, verladen=True),
         column_config={
             "Bereich":   _cc_text("Bereich",   width="small"),
@@ -1135,13 +1147,6 @@ def _frag_verladen() -> None:
             "Verladen":  _cc_check("Verladen"),
         },
     )
-    _render_excel_download(
-        view_v,
-        slug="verladen",
-        key=f"dl_verl_{ver}",
-        sheet_name="Verladen",
-    )
-
 
 @st.fragment
 def _frag_ersetzen() -> None:
@@ -1164,6 +1169,7 @@ def _frag_ersetzen() -> None:
         st.data_editor(
             base_ers, key=ek_ers, use_container_width=True,
             hide_index=True, num_rows="fixed",
+            height=_table_height_for_rows(len(base_ers), min_rows=6, max_rows=14),
             on_change=_make_callback(ek_ers, base_ers),
             column_config={
                 "Bereich":    _cc_text("Bereich",    width="small"),
@@ -1171,13 +1177,6 @@ def _frag_ersetzen() -> None:
                 "Notizen":    _cc_text("Notizen",    width="large"),
             },
         )
-    _render_excel_download(
-        view_ers,
-        slug="ersetzen",
-        key=f"dl_ers_{ver}",
-        sheet_name="Ersetzen",
-    )
-
 
 @st.fragment
 def _frag_definitionen() -> None:
@@ -1192,6 +1191,7 @@ def _frag_definitionen() -> None:
     st.data_editor(
         base, key=ek, use_container_width=True,
         hide_index=True, num_rows="fixed",
+        height=_table_height_for_rows(len(base), min_rows=6, max_rows=14),
         on_change=_make_callback(ek, base),
         column_config={
             "Gegenstand":   _cc_text("Gegenstand",   width="medium"),
@@ -1199,13 +1199,6 @@ def _frag_definitionen() -> None:
             "Bereich":      _cc_text("Bereich",      width="small"),
         },
     )
-    _render_excel_download(
-        view_def,
-        slug="definitionen",
-        key=f"dl_def_{ver}",
-        sheet_name="Definitionen",
-    )
-
 
 @st.fragment
 def _frag_uebersicht() -> None:
@@ -1223,11 +1216,16 @@ def _frag_uebersicht() -> None:
     df   = st.session_state["pl_df"]
     path = st.session_state["pl_path"]
 
-    hdr, path_col = st.columns([1, 5])
-    with hdr:
-        st.button("🔄 Aktualisieren", key="ueb_refresh")
+    path_col, refresh_col = st.columns([5, 1])
     with path_col:
         st.caption(f"Datei: `{path}`")
+    with refresh_col:
+        st.button(
+            "🔄",
+            key="ueb_refresh",
+            help="Übersicht aktualisieren",
+            use_container_width=True,
+        )
 
     st.divider()
 
