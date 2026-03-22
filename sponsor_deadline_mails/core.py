@@ -1,23 +1,30 @@
 from __future__ import annotations
 
 import io
-import re
 from dataclasses import dataclass
 from datetime import date, datetime
-from typing import Optional
 
 from openpyxl import load_workbook
 
-from .rendering import (
-    build_html_body,
-    build_intro,
-    build_subject,
-    build_summary_dataframe,
-    build_summary_rows,
-    format_event_date,
-    legend_html,
-    render_deadline_rows,
+from .parser import (
+    SponsorRow,
+    build_sponsor_row,
+    cell_value,
+    list_workbook_sheets,
+    normalize_lang,
+    normalize_package,
+    normalize_text,
+    slugify,
 )
+from .planner import (
+    DeadlineItem,
+    build_deadlines,
+    is_premium_package,
+    is_talk_package,
+    is_truthy_marker,
+    status_from_column,
+)
+from .rendering import build_html_body, build_subject, build_summary_dataframe
 
 
 DEFAULT_SHEET_NAME = "Deals"
@@ -26,53 +33,6 @@ DEFAULT_EVENT_START = date(2026, 5, 5)
 DEFAULT_EVENT_END = date(2026, 5, 7)
 
 NAME_COL = "B"
-PACKAGE_COL = "E"
-LANG_COL = "K"
-CONTACT1_FIRST_COL = "L"
-CONTACT1_LAST_COL = "M"
-CONTACT1_EMAIL_COL = "N"
-CONTACT2_FIRST_COL = "O"
-CONTACT2_LAST_COL = "P"
-CONTACT2_EMAIL_COL = "Q"
-DEAL_ACTIVE_COL = "D"
-
-STATUS_COLS = {
-    "logo": "S",
-    "team_on_site": "T",
-    "handout": "V",
-    "booklet": "W",
-    "talk_info": "X",
-    "onboarding": "Y",
-    "target_accounts": "Z",
-    "led_wall": "AA",
-    "posting_published": "AF",
-    "presentation": "AG",
-}
-
-ENGLISH_LANG_VALUES = {"ENG", "EN", "ENGLISH"}
-TALK_PACKAGES = {"gold", "platin", "platinum"}
-ACTIVE_MARKERS = {"check", "x", "ja", "yes", "true", "ok", "done", "erhalten"}
-
-
-@dataclass(frozen=True)
-class SponsorRow:
-    row_number: int
-    sponsor_name: str
-    package: str
-    language: str
-    to_email: str
-    cc_email: str
-    contact_first_name: str
-    contact_last_name: str
-
-
-@dataclass(frozen=True)
-class DeadlineItem:
-    due_date_de: str
-    due_date_en: str
-    text_de: str
-    text_en: str
-    status: str
 
 
 @dataclass(frozen=True)
@@ -102,227 +62,6 @@ class GenerationResult:
     mails: tuple[GeneratedMail, ...]
     processed_count: int
     skipped_count: int
-
-
-def normalize_text(value: object) -> str:
-    if value is None:
-        return ""
-    return str(value).strip()
-
-
-def normalize_lang(value: object) -> str:
-    return "EN" if normalize_text(value).upper() in ENGLISH_LANG_VALUES else "DE"
-
-
-def normalize_package(value: object) -> str:
-    return normalize_text(value)
-
-
-def slugify(value: str) -> str:
-    text = normalize_text(value).casefold()
-    text = re.sub(r"[^\w]+", "_", text, flags=re.UNICODE)
-    text = text.strip("_")
-    return text or "sponsor"
-
-
-def is_truthy_marker(value: object) -> bool:
-    if value is None:
-        return False
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, (int, float)):
-        return True
-    text = str(value).strip()
-    if not text:
-        return False
-    # Every non-empty text, comment, or date counts as "received", matching the CLI script.
-    return True
-
-
-def is_talk_package(package: str) -> bool:
-    return package.strip().lower() in TALK_PACKAGES
-
-
-def is_premium_package(package: str) -> bool:
-    return "premium" in package.strip().lower()
-
-
-def cell_value(ws, col: str, row: int) -> object:
-    return ws[f"{col}{row}"].value
-
-
-def list_workbook_sheets(excel_bytes: bytes) -> list[str]:
-    workbook = load_workbook(io.BytesIO(excel_bytes), read_only=True, data_only=False)
-    try:
-        return list(workbook.sheetnames)
-    finally:
-        workbook.close()
-
-
-def build_sponsor_row(ws, row: int) -> Optional[SponsorRow]:
-    sponsor_name = normalize_text(cell_value(ws, NAME_COL, row))
-    if not sponsor_name:
-        return None
-
-    deal_active = normalize_text(cell_value(ws, DEAL_ACTIVE_COL, row)).lower()
-    if deal_active and deal_active not in ACTIVE_MARKERS:
-        return None
-
-    package = normalize_package(cell_value(ws, PACKAGE_COL, row))
-    language = normalize_lang(cell_value(ws, LANG_COL, row))
-
-    first_name = normalize_text(cell_value(ws, CONTACT1_FIRST_COL, row))
-    last_name = normalize_text(cell_value(ws, CONTACT1_LAST_COL, row))
-    to_email = normalize_text(cell_value(ws, CONTACT1_EMAIL_COL, row))
-    cc_email = normalize_text(cell_value(ws, CONTACT2_EMAIL_COL, row))
-
-    if not to_email and cc_email:
-        to_email = cc_email
-        cc_email = ""
-        first_name = normalize_text(cell_value(ws, CONTACT2_FIRST_COL, row))
-        last_name = normalize_text(cell_value(ws, CONTACT2_LAST_COL, row))
-
-    if not to_email:
-        return None
-
-    return SponsorRow(
-        row_number=row,
-        sponsor_name=sponsor_name,
-        package=package,
-        language=language,
-        to_email=to_email,
-        cc_email=cc_email,
-        contact_first_name=first_name,
-        contact_last_name=last_name,
-    )
-
-
-def status_from_column(ws, row: int, col: str) -> str:
-    return "green" if is_truthy_marker(cell_value(ws, col, row)) else "red"
-
-
-def build_deadlines(ws, sponsor: SponsorRow) -> list[DeadlineItem]:
-    talk_relevant = is_talk_package(sponsor.package)
-    premium_package = is_premium_package(sponsor.package)
-    talk_info_status = (
-        status_from_column(ws, sponsor.row_number, STATUS_COLS["talk_info"])
-        if talk_relevant
-        else "white"
-    )
-    presentation_status = (
-        status_from_column(ws, sponsor.row_number, STATUS_COLS["presentation"])
-        if talk_relevant
-        else "white"
-    )
-
-    items = [
-        DeadlineItem(
-            due_date_de="ASAP",
-            due_date_en="ASAP",
-            text_de="Buche das virtuelle Onboarding-Meeting. (Buche das Meeting im Idealfall in dem Zeitraum vom 09.03.2026 bis zum 13.03.2026)",
-            text_en="Book the virtual onboarding meeting. (Ideally schedule it between 09/03/2026 and 13/03/2026)",
-            status="white",
-        ),
-        DeadlineItem(
-            due_date_de="ASAP",
-            due_date_en="ASAP",
-            text_de="Sende das Unternehmenslogo, falls dies noch nicht erfolgt ist.",
-            text_en="Send your company logo, if you have not already done so.",
-            status=status_from_column(ws, sponsor.row_number, STATUS_COLS["logo"]),
-        ),
-        DeadlineItem(
-            due_date_de="ASAP",
-            due_date_en="ASAP",
-            text_de="Sende deine Target Account Liste, damit wir diese zu dem Event einladen können (Wunschteilnehmer).",
-            text_en="Send your target account list so that we can invite them to the event (preferred attendees).",
-            status=status_from_column(ws, sponsor.row_number, STATUS_COLS["target_accounts"]),
-        ),
-        DeadlineItem(
-            due_date_de="ASAP",
-            due_date_en="ASAP",
-            text_de="Poste das individuelle Visual zur Veranstaltung auf LinkedIn; gerne unterstütze ich bei der Erstellung.",
-            text_en="Post the individual event visual on LinkedIn; I am happy to support you with its creation.",
-            status=status_from_column(ws, sponsor.row_number, STATUS_COLS["posting_published"]),
-        ),
-        DeadlineItem(
-            due_date_de="ASAP",
-            due_date_en="ASAP",
-            text_de="Buche Dein Team vor Ort in das Eventhotel ein.",
-            text_en="Book your on-site team into the event hotel.",
-            status="white",
-        ),
-        DeadlineItem(
-            due_date_de="26.03.2026",
-            due_date_en="26/03/2026",
-            text_de="Sende das LED-Wand-Design.",
-            text_en="Send the LED wall design.",
-            status=status_from_column(ws, sponsor.row_number, STATUS_COLS["led_wall"]),
-        ),
-        DeadlineItem(
-            due_date_de="26.03.2026",
-            due_date_en="26/03/2026",
-            text_de="Sende die Informationen für das Booklet.",
-            text_en="Send the information for the booklet.",
-            status=status_from_column(ws, sponsor.row_number, STATUS_COLS["booklet"]),
-        ),
-        DeadlineItem(
-            due_date_de="26.03.2026",
-            due_date_en="26/03/2026",
-            text_de="Sende die Kontaktdaten Deines Teams.",
-            text_en="Send the contact details of your on-site team.",
-            status=status_from_column(ws, sponsor.row_number, STATUS_COLS["team_on_site"]),
-        ),
-        DeadlineItem(
-            due_date_de="26.03.2026",
-            due_date_en="26/03/2026",
-            text_de="Sende uns die Vortragsinformationen zu.",
-            text_en="Send us the talk information.",
-            status=talk_info_status,
-        ),
-        DeadlineItem(
-            due_date_de="26.03.2026",
-            due_date_en="26/03/2026",
-            text_de="Sende das Handout/Whitepaper.",
-            text_en="Send the handout / whitepaper.",
-            status=status_from_column(ws, sponsor.row_number, STATUS_COLS["handout"]),
-        ),
-        DeadlineItem(
-            due_date_de="20.04.2026",
-            due_date_en="20/04/2026",
-            text_de="Sende uns die Vortragspräsentation zu.",
-            text_en="Send us the presentation slides.",
-            status=presentation_status,
-        ),
-        DeadlineItem(
-            due_date_de="20.04.2026",
-            due_date_en="20/04/2026",
-            text_de="Severin sendet Dir die Kontaktdatenliste aller Teilnehmer zur Vorauswahl der individuellen 1:1-Meetings.",
-            text_en="Severin will send you the contact details list of all participants for the pre-selection of individual 1:1 meetings.",
-            status="yellow",
-        ),
-        DeadlineItem(
-            due_date_de="27.04.2026",
-            due_date_en="27/04/2026",
-            text_de="Sende Severin die Auswahl der Gesprächswünsche auf Basis der Kontaktdatenliste (vom 20.04.2026) für eine optimale Vorbereitung der Meetings.",
-            text_en="Send Severin your preferred meeting selections based on the contact details list (from 20/04/2026) for optimal meeting preparation.",
-            status="yellow",
-        ),
-    ]
-
-    if premium_package:
-        excluded_tasks = {
-            "Sende uns die Vortragsinformationen zu.",
-            "Sende uns die Vortragspräsentation zu.",
-            "Send us the talk information.",
-            "Send us the presentation slides.",
-        }
-        return [
-            item
-            for item in items
-            if item.text_de not in excluded_tasks and item.text_en not in excluded_tasks
-        ]
-
-    return items
 
 
 def parse_event_date(value: date | str) -> date:
