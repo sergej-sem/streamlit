@@ -1,9 +1,12 @@
 # badgegen/hubspot_search.py
-
 from typing import Dict, Any, List, Optional
 import requests
 
-HUBSPOT_BASE = "https://api.hubapi.com"
+from shared.hubspot import (
+    _request_json,
+    search_contacts as shared_search_contacts,
+    search_contacts_with_auto_split as shared_search_contacts_with_auto_split,
+)
 
 # Contact properties (fix)
 P_FIRSTNAME = "firstname"
@@ -19,16 +22,23 @@ class HubSpotAPIError(RuntimeError):
         self.status_code = status_code
 
 
+def _wrap_http_error(exc: requests.HTTPError) -> HubSpotAPIError:
+    status_code = getattr(getattr(exc, "response", None), "status_code", None) or 0
+    return HubSpotAPIError(int(status_code), str(exc))
+
+
 def hs_post(token: str, path: str, json: dict | None = None) -> dict:
-    r = requests.post(
-        f"{HUBSPOT_BASE}{path}",
-        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
-        json=json,
-        timeout=60,
-    )
-    if r.status_code >= 400:
-        raise HubSpotAPIError(r.status_code, f"HubSpot POST {path} failed: {r.status_code} {r.text[:800]}")
-    return r.json()
+    try:
+        return _request_json(
+            "POST",
+            path,
+            token=token,
+            json=json,
+            timeout=60,
+            include_content_type=True,
+        )
+    except requests.HTTPError as exc:
+        raise _wrap_http_error(exc) from exc
 
 
 def _search_contacts_paged(
@@ -38,36 +48,15 @@ def _search_contacts_paged(
     properties: List[str],
     max_results: Optional[int] = None,  # None = unbegrenzt
 ) -> List[Dict[str, Any]]:
-    out: List[Dict[str, Any]] = []
-    after: Optional[str] = None
-
-    while True:
-        if max_results is not None:
-            remaining = max_results - len(out)
-            if remaining <= 0:
-                break
-            limit = min(100, remaining)
-        else:
-            limit = 100  # HubSpot page size (keine Ergebnis-Begrenzung, nur Paging)
-
-        payload: Dict[str, Any] = {
-            "limit": limit,
-            "properties": properties,
-        }
-        if filter_groups:
-            payload["filterGroups"] = filter_groups
-        if after:
-            payload["after"] = after
-
-        data = hs_post(token, "/crm/v3/objects/contacts/search", json=payload)
-        batch = data.get("results", []) or []
-        out.extend(batch)
-
-        after = (data.get("paging") or {}).get("next", {}).get("after")
-        if not after or not batch:
-            break
-
-    return out
+    try:
+        return shared_search_contacts(
+            filter_groups,
+            properties,
+            token=token,
+            max_results=max_results,
+        )
+    except requests.HTTPError as exc:
+        raise _wrap_http_error(exc) from exc
 
 
 def search_contacts_auto_split(
@@ -82,27 +71,11 @@ def search_contacts_auto_split(
     (Gleiche Idee wie in deiner Excel-Export-Page.)
     """
     try:
-        return _search_contacts_paged(token, filter_groups=filter_groups, properties=properties, max_results=max_results)
-    except HubSpotAPIError as e:
-        if e.status_code == 400 and len(filter_groups) > 1:
-            mid = len(filter_groups) // 2
-            left = search_contacts_auto_split(
-                token,
-                filter_groups=filter_groups[:mid],
-                properties=properties,
-                max_results=max_results,
-            )
-            right = search_contacts_auto_split(
-                token,
-                filter_groups=filter_groups[mid:],
-                properties=properties,
-                max_results=max_results,
-            )
-
-            by_id: Dict[str, Dict[str, Any]] = {}
-            for item in left + right:
-                cid = item.get("id")
-                if cid:
-                    by_id[cid] = item
-            return list(by_id.values())
-        raise
+        return shared_search_contacts_with_auto_split(
+            filter_groups,
+            properties,
+            token=token,
+            max_results=max_results,
+        )
+    except requests.HTTPError as exc:
+        raise _wrap_http_error(exc) from exc

@@ -1,13 +1,12 @@
 import requests
 import streamlit as st
 
+from shared.hubspot import build_headers
+
 BASE = "https://api.hubapi.com"
 
 def hs_headers() -> dict:
-    return {
-        "Authorization": f"Bearer {st.secrets['HUBSPOT_TOKEN']}",
-        "Content-Type": "application/json",
-    }
+    return build_headers(secrets=st.secrets)
 
 def get_contact_lists(count: int = 500) -> list[dict]:
     """

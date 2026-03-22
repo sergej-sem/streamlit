@@ -1,5 +1,6 @@
 # secrets
 .streamlit/secrets.toml
+pages/.packliste_meta.json
 
 # virtual environment
 .venv/

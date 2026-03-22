@@ -6,11 +6,9 @@
 
 import os
 import re
-import time
-import math
 import textwrap
 from io import BytesIO
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Tuple
 
 import pandas as pd
 import requests
@@ -19,6 +17,8 @@ from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Border, Font, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.page import PageMargins
+from shared.config import ConfigError, get_hubspot_token
+from shared.hubspot import fetch_property_options, search_contacts_with_auto_split
 from streamlit_ui import render_page_title
 
 
@@ -54,41 +54,12 @@ INITIAL_FILTERGROUPS_PER_REQUEST = 5
 # HubSpot Helpers (Requests)
 # ----------------------------
 def get_access_token() -> str:
-    token = None
-    if hasattr(st, "secrets"):
-        token = st.secrets.get("HUBSPOT_TOKEN") or st.secrets.get("HUBSPOT_ACCESS_TOKEN")
-    token = token or os.getenv("HUBSPOT_TOKEN") or os.getenv("HUBSPOT_ACCESS_TOKEN")
-
-    if not token:
+    try:
+        return get_hubspot_token(getattr(st, "secrets", None), os.environ)
+    except ConfigError as exc:
         raise RuntimeError(
             "Kein HubSpot Token gefunden. Bitte HUBSPOT_TOKEN (oder HUBSPOT_ACCESS_TOKEN) setzen."
-        )
-    return token
-
-
-def hs_headers() -> Dict[str, str]:
-    return {
-        "Authorization": f"Bearer {get_access_token()}",
-        "Content-Type": "application/json",
-    }
-
-
-def hs_get(url: str) -> dict:
-    r = requests.get(url, headers=hs_headers(), timeout=30)
-    r.raise_for_status()
-    return r.json()
-
-
-def hs_post(url: str, payload: dict) -> dict:
-    r = requests.post(url, headers=hs_headers(), json=payload, timeout=60)
-    if not r.ok:
-        # HubSpot liefert oft hilfreiche Details im Body
-        try:
-            details = r.json()
-        except Exception:
-            details = r.text
-        raise requests.HTTPError(f"{r.status_code} {r.reason}: {details}", response=r)
-    return r.json()
+        ) from exc
 
 
 @st.cache_data(ttl=3600)
@@ -98,73 +69,17 @@ def fetch_historie_options() -> List[Tuple[str, str]]:
     Wenn Scopes fehlen oder Property Freitext ist: []
     """
     try:
-        url = f"https://api.hubapi.com/crm/v3/properties/contacts/{HISTORIE_PROPERTY}"
-        data = hs_get(url)
-        options = data.get("options", []) or []
-
-        out: List[Tuple[str, str]] = []
-        for o in options:
-            if o.get("hidden"):
-                continue
-            label = (o.get("label") or "").strip()
-            value = (o.get("value") or "").strip()
-            if label and value:
-                out.append((label, value))
-        return out
+        return fetch_property_options(
+            HISTORIE_PROPERTY,
+            token=get_access_token(),
+            object_type="contacts",
+        )
     except Exception:
         return []
 
 
 def _chunks(lst: List[str], n: int) -> List[List[str]]:
     return [lst[i : i + n] for i in range(0, len(lst), n)]
-
-
-def _search_contacts_with_filtergroups(filter_groups: List[dict]) -> List[dict]:
-    """
-    Führt die HubSpot Search mit paging aus – für eine gegebene Menge filterGroups.
-    """
-    url = "https://api.hubapi.com/crm/v3/objects/contacts/search"
-    out: List[dict] = []
-    after: Optional[str] = None
-
-    while True:
-        payload = {
-            "filterGroups": filter_groups,
-            "properties": HS_PROPERTIES,
-            "limit": 100,
-        }
-        if after is not None:
-            payload["after"] = after
-
-        data = hs_post(url, payload)
-        out.extend(data.get("results", []))
-
-        paging = data.get("paging", {})
-        nxt = paging.get("next", {})
-        after = nxt.get("after")
-        if not after:
-            break
-
-        time.sleep(0.08)
-
-    return out
-
-
-def _search_with_auto_split(filter_groups: List[dict]) -> List[dict]:
-    """
-    Wenn HubSpot 400 wirft (z.B. wegen zu vieler filterGroups), splitten wir automatisch
-    in kleinere Requests, bis es akzeptiert wird.
-    """
-    try:
-        return _search_contacts_with_filtergroups(filter_groups)
-    except requests.HTTPError as e:
-        status = getattr(getattr(e, "response", None), "status_code", None)
-        if status == 400 and len(filter_groups) > 1:
-            mid = len(filter_groups) // 2
-            left = _search_with_auto_split(filter_groups[:mid])
-            right = _search_with_auto_split(filter_groups[mid:])
-            return left + right
-        raise
 
 
 def fetch_contacts_by_historien(historie_values: List[str]) -> List[dict]:
@@ -181,6 +96,7 @@ def fetch_contacts_by_historien(historie_values: List[str]) -> List[dict]:
     if not historie_values:
         return []
 
+    token = get_access_token()
     results_by_id: Dict[str, dict] = {}
 
     for batch in _chunks(historie_values, INITIAL_FILTERGROUPS_PER_REQUEST):
@@ -197,7 +113,11 @@ def fetch_contacts_by_historien(historie_values: List[str]) -> List[dict]:
             for hv in batch
         ]
 
-        results = _search_with_auto_split(filter_groups)
+        results = search_contacts_with_auto_split(
+            filter_groups,
+            HS_PROPERTIES,
+            token=token,
+        )
 
         for item in results:
             cid = item.get("id")

@@ -79,19 +79,38 @@ Row identity
   Both strategies are stable; no separate row-ID column is needed.
 """
 
-import json
 import logging
-import pickle
 import threading
 import time
-from io import BytesIO
+from functools import partial
 from pathlib import Path
 
-import openpyxl
 import pandas as pd
 import streamlit as st
-from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
-from openpyxl.utils import get_column_letter
+from packliste.editor_sync import (
+    flush_full_rerun_after_editor_commit,
+    get_frozen_base,
+    make_callback,
+)
+from packliste.export import download_filename as _download_filename
+from packliste.export import to_excel_bytes as _to_excel_bytes
+from packliste.overview import build_overview_stats as _build_overview_stats
+from packliste.state import (
+    apply_redo,
+    apply_undo,
+    drop_fully_empty_editor_rows,
+    init_session_state,
+    normalize_editor_mode_df,
+    push_history,
+)
+from packliste.storage import (
+    _write_sidecar,
+    load_df as _load_df_impl,
+    load_last_active_path as _load_last_active_path_impl,
+    restore_state_for_path as _restore_state_for_path_impl,
+    save_df as _save_df_impl,
+    save_last_active_path as _save_last_active_path_impl,
+)
 from streamlit_ui import apply_page_title_style, page_title_html
 
 st.set_page_config(page_title="Packliste", layout="wide")
@@ -151,7 +170,7 @@ CHECKBOX_COLS     = [
     "Verpackt", "Nachfüllen", "Reinigung",
     "kurz vor Event packen", "Verladen",
 ]
-DEFAULT_PATH = r"C:\Users\admin\Downloads\26BER_Packliste.xlsx"
+DEFAULT_PATH = ""
 MAX_HISTORY  = 30
 
 REQUIRED_COLS = [
@@ -182,201 +201,73 @@ def _get_thread_state() -> dict:
         "save_lock":     threading.Lock(),
         "save_gen_lock": threading.Lock(),
         "save_gen":      [0],
-        "excel_result":  {"status": "ok", "error": None},
+        "excel_result_lock": threading.Lock(),
+        "excel_result":  {
+            "status": "idle",
+            "error": None,
+            "active_gen": 0,
+            "completed_gen": 0,
+            "updated_at": 0.0,
+        },
     }
 
 _ts            = _get_thread_state()
+_ts.setdefault("excel_result_lock", threading.Lock())
+_ts.setdefault("excel_result", {})
+_ts["excel_result"].setdefault("status", "idle")
+_ts["excel_result"].setdefault("error", None)
+_ts["excel_result"].setdefault("active_gen", 0)
+_ts["excel_result"].setdefault("completed_gen", 0)
+_ts["excel_result"].setdefault("updated_at", 0.0)
 _save_lock     = _ts["save_lock"]
 _save_gen_lock = _ts["save_gen_lock"]
 _save_gen      = _ts["save_gen"]
+_excel_result_lock = _ts["excel_result_lock"]
 _excel_result  = _ts["excel_result"]
 
+# -- Meta-file helpers (last-active path) -------------------------------
 
-# ── Meta-file helpers (last-active path) ──────────────────────────────────────
+save_last_active_path = partial(_save_last_active_path_impl, _META_FILE, logger=_log)
 
-def save_last_active_path(path: str) -> None:
-    """Persist the last-used Excel path so refreshes can restore it."""
-    try:
-        with open(_META_FILE, "w", encoding="utf-8") as fh:
-            json.dump({"path": path, "ts": time.time()}, fh)
-    except Exception as exc:
-        _log.warning("Cannot write meta %s: %s", _META_FILE, exc)
+load_last_active_path = partial(_load_last_active_path_impl, _META_FILE, logger=_log)
 
 
-def load_last_active_path() -> str:
-    """Return last-active path, or DEFAULT_PATH when unavailable."""
-    try:
-        if _META_FILE.exists():
-            with open(_META_FILE, "r", encoding="utf-8") as fh:
-                data = json.load(fh)
-            p = data.get("path", "")
-            if p and Path(p).exists():
-                return p
-    except Exception as exc:
-        _log.warning("Cannot read meta %s: %s", _META_FILE, exc)
-    return DEFAULT_PATH
+# -- State restoration ---------------------------------------------------
+
+restore_state_for_path = partial(
+    _restore_state_for_path_impl,
+    sheet_name=SHEET_NAME,
+    required_cols=REQUIRED_COLS,
+    checkbox_cols=CHECKBOX_COLS,
+    checked_value=CHECKED,
+    logger=_log,
+)
 
 
-# ── Sidecar helpers ────────────────────────────────────────────────────────────
+# -- Excel I/O ----------------------------------------------------------
 
-def _sidecar_path(excel_path: str) -> Path:
-    p = Path(excel_path)
-    return p.parent / f"{p.stem}_autosave.pkl"
-
-
-def _write_sidecar(df: pd.DataFrame, excel_path: str) -> None:
-    """Atomic synchronous pickle write.  Raises on failure – caller handles."""
-    sp      = _sidecar_path(excel_path)
-    tmp     = sp.with_suffix(".pkl.tmp")
-    payload = {"df": df.copy(), "path": excel_path, "ts": time.time()}
-    with open(tmp, "wb") as fh:
-        pickle.dump(payload, fh, protocol=pickle.HIGHEST_PROTOCOL)
-    tmp.replace(sp)
+load_df = partial(
+    _load_df_impl,
+    sheet_name=SHEET_NAME,
+    required_cols=REQUIRED_COLS,
+    checkbox_cols=CHECKBOX_COLS,
+    checked_value=CHECKED,
+)
 
 
-def _read_sidecar(excel_path: str):
-    sp = _sidecar_path(excel_path)
-    if not sp.exists():
-        return None
-    try:
-        with open(sp, "rb") as fh:
-            data = pickle.load(fh)
-        if data.get("path") != excel_path:
-            return None
-        return data["df"]
-    except Exception as exc:
-        _log.warning("Cannot read sidecar %s: %s", sp, exc)
-        return None
+save_df = partial(
+    _save_df_impl,
+    sheet_name=SHEET_NAME,
+    required_cols=REQUIRED_COLS,
+    checkbox_cols=CHECKBOX_COLS,
+    checked_value=CHECKED,
+    unchecked_value=UNCHECKED,
+)
 
-
-def _sidecar_newer(excel_path: str) -> bool:
-    sp = _sidecar_path(excel_path)
-    ep = Path(excel_path)
-    if not sp.exists():
-        return False
-    if not ep.exists():
-        return True
-    return sp.stat().st_mtime > ep.stat().st_mtime
-
-
-# ── State restoration ──────────────────────────────────────────────────────────
-
-def restore_state_for_path(path: str):
-    """
-    Load best available state for *path*.
-    Returns (df, source) where source ∈ {"sidecar", "excel"}.
-    Raises ValueError / IOError on failure.
-    """
-    if _sidecar_newer(path):
-        sdf = _read_sidecar(path)
-        if sdf is not None:
-            return sdf, "sidecar"
-    df = load_df(path)
-    return df, "excel"
-
-
-# ── Excel I/O ──────────────────────────────────────────────────────────────────
-
-def _detect_sheet_layout(ws) -> tuple[int, int, dict[str, int]]:
-    """Return header row index for pandas, first data row in Excel, and header map."""
-    for excel_row in range(1, min(ws.max_row, 12) + 1):
-        col_map = {
-            str(cell.value).strip(): cell.column
-            for cell in ws[excel_row]
-            if cell.value and str(cell.value).strip()
-        }
-        if all(col in col_map for col in REQUIRED_COLS):
-            data_start_row = excel_row + 1
-            for candidate_row in range(excel_row + 1, ws.max_row + 1):
-                has_data = any(
-                    ws.cell(candidate_row, xl_col).value not in (None, "")
-                    for xl_col in col_map.values()
-                )
-                if has_data:
-                    data_start_row = candidate_row
-                    break
-            return excel_row - 1, data_start_row, col_map
-
-    raise ValueError(
-        "Headerzeile im Sheet 'Packliste' nicht gefunden. "
-        "Bitte prÃ¼fen, ob die Pflichtspalten vorhanden sind."
-    )
-
-
-def load_df(path: str) -> pd.DataFrame:
-    wb = openpyxl.load_workbook(path, read_only=True, data_only=False)
-    try:
-        ws = wb[SHEET_NAME]
-        header_row_idx, _, _ = _detect_sheet_layout(ws)
-    finally:
-        wb.close()
-
-    df = pd.read_excel(path, sheet_name=SHEET_NAME,
-                       header=header_row_idx, dtype=str)
-    df = df.where(df.notna() & (df != "nan"), "")
-    missing = [c for c in REQUIRED_COLS if c not in df.columns]
-    if missing:
-        raise ValueError(
-            f"Fehlende Spalten: {missing}\n\n"
-            f"Gefundene Spalten: {list(df.columns)}\n\n"
-            "Bitte prüfen, ob die richtige Datei und das Sheet 'Packliste' geladen wird."
-        )
-    for col in CHECKBOX_COLS:
-        if col in df.columns:
-            df[col] = df[col] == CHECKED
-    if "Verladen" not in df.columns:
-        df["Verladen"] = False
-    return df
-
-
-def save_df(df: pd.DataFrame, path: str) -> None:
-    """
-    Near-atomic Excel write:
-      1. Write to <stem>.tmp.xlsx
-      2. Rename to <path>  (replaces original only after full successful write)
-    If anything fails the original file is untouched; tmp is cleaned up.
-    """
-    p   = Path(path)
-    tmp = p.parent / (p.stem + ".tmp.xlsx")
-    try:
-        wb   = openpyxl.load_workbook(path)
-        ws   = wb[SHEET_NAME]
-        header_row_idx, data_start_row, col_map = _detect_sheet_layout(ws)
-        hrow = header_row_idx + 1
-        if "Verladen" not in col_map:
-            nxt = max(col_map.values()) + 1
-            ws.cell(row=hrow, column=nxt, value="Verladen")
-            col_map["Verladen"] = nxt
-        for i, (_, row) in enumerate(df.iterrows()):
-            xl_row = data_start_row + i
-            for col_name, xl_col in col_map.items():
-                if col_name not in df.columns:
-                    continue
-                val = row[col_name]
-                if col_name in CHECKBOX_COLS:
-                    val = CHECKED if bool(val) else UNCHECKED
-                else:
-                    val = val if val != "" else None
-                ws.cell(row=xl_row, column=xl_col, value=val)
-        first_clear_row = data_start_row + len(df)
-        if first_clear_row <= ws.max_row:
-            for xl_row in range(first_clear_row, ws.max_row + 1):
-                for xl_col in set(col_map.values()):
-                    ws.cell(row=xl_row, column=xl_col, value=None)
-        wb.save(str(tmp))
-        tmp.replace(p)
-    except Exception:
-        try:
-            tmp.unlink(missing_ok=True)
-        except Exception:
-            pass
-        raise
-
-
-# ── Column-config shortcuts ────────────────────────────────────────────────────
 
 def _cc_text(label: str, width: str = "medium") -> st.column_config.TextColumn:
     return st.column_config.TextColumn(label, width=width)
+
 
 def _cc_number_left(label: str, width: str | None = None, fmt: str = "%d") -> dict:
     cfg = st.column_config.NumberColumn(label, width=width, format=fmt)
@@ -385,75 +276,6 @@ def _cc_number_left(label: str, width: str | None = None, fmt: str = "%d") -> di
 
 def _cc_check(label: str) -> st.column_config.CheckboxColumn:
     return st.column_config.CheckboxColumn(label)
-
-
-def _to_excel_bytes(df: pd.DataFrame, sheet_name: str = "Liste") -> bytes:
-    data = BytesIO()
-    export_df = df.reset_index(drop=True).copy()
-    for col in CHECKBOX_COLS:
-        if col in export_df.columns:
-            export_df[col] = export_df[col].map(lambda v: "Ja" if bool(v) else "Nein")
-    with pd.ExcelWriter(data, engine="openpyxl") as writer:
-        export_df.to_excel(writer, index=False, sheet_name=sheet_name)
-        ws = writer.book[sheet_name]
-
-        header_fill = PatternFill("solid", fgColor="1F4E78")
-        header_font = Font(color="FFFFFF", bold=True)
-        header_alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-        cell_alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
-        center_alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-        border = Border(
-            left=Side(style="thin", color="D9E2F3"),
-            right=Side(style="thin", color="D9E2F3"),
-            top=Side(style="thin", color="D9E2F3"),
-            bottom=Side(style="thin", color="D9E2F3"),
-        )
-        stripe_fill = PatternFill("solid", fgColor="F7F9FC")
-
-        ws.freeze_panes = "A2"
-        ws.auto_filter.ref = ws.dimensions
-        ws.sheet_view.showGridLines = False
-        ws.row_dimensions[1].height = 24
-
-        for cell in ws[1]:
-            cell.fill = header_fill
-            cell.font = header_font
-            cell.alignment = header_alignment
-            cell.border = border
-
-        for row_idx in range(2, ws.max_row + 1):
-            is_striped = row_idx % 2 == 0
-            for col_idx in range(1, ws.max_column + 1):
-                cell = ws.cell(row=row_idx, column=col_idx)
-                cell.border = border
-                cell.alignment = cell_alignment
-                if is_striped:
-                    cell.fill = stripe_fill
-
-        for col_idx, column_name in enumerate(export_df.columns, start=1):
-            col_letter = get_column_letter(col_idx)
-            values = [column_name, *export_df.iloc[:, col_idx - 1].tolist()]
-            max_length = max(len(str(v)) if v is not None else 0 for v in values)
-            width = min(max(max_length + 2, 12), 42)
-            if column_name in {"Beschreibung", "Notizen"}:
-                width = min(max(max_length + 2, 24), 56)
-            if column_name in CHECKBOX_COLS or column_name == "Fortschritt":
-                width = min(max(max_length + 2, 12), 16)
-                for row_idx in range(2, ws.max_row + 1):
-                    ws.cell(row=row_idx, column=col_idx).alignment = center_alignment
-            ws.column_dimensions[col_letter].width = width
-
-        if "Fortschritt" in export_df.columns:
-            progress_idx = export_df.columns.get_loc("Fortschritt") + 1
-            for row_idx in range(2, ws.max_row + 1):
-                ws.cell(row=row_idx, column=progress_idx).number_format = '0" %"'
-    data.seek(0)
-    return data.getvalue()
-
-
-def _download_filename(slug: str) -> str:
-    path = Path(st.session_state.get("pl_path") or "packliste.xlsx")
-    return f"{path.stem}_{slug}.xlsx"
 
 
 def _render_excel_download(
@@ -468,8 +290,8 @@ def _render_excel_download(
 ) -> None:
     st.download_button(
         label,
-        data=_to_excel_bytes(df, sheet_name=sheet_name),
-        file_name=_download_filename(slug),
+        data=_to_excel_bytes(df, sheet_name=sheet_name, checkbox_cols=CHECKBOX_COLS),
+        file_name=_download_filename(st.session_state.get("pl_path"), slug),
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         key=key,
         use_container_width=use_container_width,
@@ -505,83 +327,6 @@ def _table_height_for_rows(
 ) -> int:
     visible_rows = min(max(row_count, 1), max_rows)
     return header_px + visible_rows * row_px
-
-
-def _normalize_editor_mode_df(
-    df: pd.DataFrame,
-    columns: pd.Index,
-) -> pd.DataFrame:
-    normalized = df.copy().reindex(columns=columns)
-    checkbox_cols = [col for col in normalized.columns if col in CHECKBOX_COLS or col == "Verladen"]
-
-    for col in normalized.columns:
-        if col in checkbox_cols:
-            normalized[col] = normalized[col].fillna(False).astype(bool)
-        else:
-            normalized[col] = normalized[col].where(normalized[col].notna(), "")
-
-    return normalized.reset_index(drop=True)
-
-
-def _drop_fully_empty_editor_rows(df: pd.DataFrame) -> pd.DataFrame:
-    if df.empty:
-        return df.reset_index(drop=True)
-
-    checkbox_cols = [col for col in df.columns if col in CHECKBOX_COLS or col == "Verladen"]
-    text_cols = [col for col in df.columns if col not in checkbox_cols]
-
-    keep_mask = pd.Series(False, index=df.index)
-    if text_cols:
-        keep_mask = df[text_cols].apply(
-            lambda row: any(bool(pd.notna(v) and str(v).strip()) for v in row),
-            axis=1,
-        )
-    if checkbox_cols:
-        keep_mask = keep_mask | df[checkbox_cols].fillna(False).astype(bool).any(axis=1)
-
-    return df.loc[keep_mask].reset_index(drop=True)
-
-
-def _build_overview_stats(
-    df: pd.DataFrame,
-    *,
-    done_mask: pd.Series,
-    total_mask: pd.Series | None = None,
-    value_label: str,
-) -> pd.DataFrame:
-    if "Bereich" not in df.columns:
-        return pd.DataFrame(columns=["Bereich", value_label, "Gesamt", "Fortschritt"])
-
-    if total_mask is None:
-        total_mask = pd.Series(True, index=df.index)
-
-    base = df.loc[total_mask.astype(bool), ["Bereich"]].copy()
-    if base.empty:
-        return pd.DataFrame(columns=["Bereich", value_label, "Gesamt", "Fortschritt"])
-
-    base[value_label] = done_mask.loc[base.index].astype(bool).astype(int)
-    base["_row_count"] = 1
-    stats = (
-        base.groupby("Bereich", as_index=False)
-        .agg({value_label: "sum", "_row_count": "sum"})
-    )
-    stats = stats.rename(columns={"_row_count": "Gesamt"})
-    stats["Fortschritt"] = (
-        stats[value_label] / stats["Gesamt"].clip(lower=1) * 100
-    ).round(0).astype(int)
-
-    total_row = pd.DataFrame(
-        {
-            "Bereich": ["Gesamt"],
-            value_label: [int(base[value_label].sum())],
-            "Gesamt": [len(base)],
-        }
-    )
-    total_row["Fortschritt"] = (
-        total_row[value_label] / total_row["Gesamt"].clip(lower=1) * 100
-    ).round(0).astype(int)
-
-    return pd.concat([stats.sort_values("Bereich"), total_row], ignore_index=True)
 
 
 def _render_overview_stats_table(
@@ -704,17 +449,46 @@ def _render_overview_stats_df(
     )
 
 
-def _push_history() -> None:
-    st.session_state["pl_redo_stack"] = []
-    hist: list = st.session_state.setdefault("pl_history", [])
-    hist.append(st.session_state["pl_df"].copy())
-    if len(hist) > MAX_HISTORY:
-        hist.pop(0)
-
-
 # ── Two-stage save pipeline ────────────────────────────────────────────────────
 
-def _auto_save() -> None:
+def _set_excel_result_saving(gen: int) -> None:
+    with _excel_result_lock:
+        _excel_result["status"] = "saving"
+        _excel_result["error"] = None
+        _excel_result["active_gen"] = gen
+        _excel_result["updated_at"] = time.time()
+
+
+def _set_excel_result_finished(gen: int, *, error: str | None = None) -> None:
+    with _excel_result_lock:
+        if gen != _excel_result.get("active_gen", 0):
+            return
+        _excel_result["status"] = "error" if error else "ok"
+        _excel_result["error"] = error
+        _excel_result["completed_gen"] = gen
+        _excel_result["updated_at"] = time.time()
+
+
+def _get_excel_result_snapshot() -> dict:
+    with _excel_result_lock:
+        return dict(_excel_result)
+
+
+def _wait_for_excel_result(
+    gen: int,
+    *,
+    timeout_s: float = 4.0,
+    poll_s: float = 0.05,
+) -> dict:
+    deadline = time.monotonic() + timeout_s
+    snapshot = _get_excel_result_snapshot()
+    while snapshot.get("completed_gen", 0) < gen and time.monotonic() < deadline:
+        time.sleep(poll_s)
+        snapshot = _get_excel_result_snapshot()
+    return snapshot
+
+
+def _auto_save() -> int:
     """
     Stage 1 – Sidecar (sync, ~1 ms):
         Atomic pickle.  Data survives any refresh from this point on.
@@ -741,8 +515,7 @@ def _auto_save() -> None:
     with _save_gen_lock:
         _save_gen[0] += 1
         my_gen = _save_gen[0]
-    _excel_result["status"] = "saving"
-    _excel_result["error"]  = None
+    _set_excel_result_saving(my_gen)
 
     def _worker(df_copy: pd.DataFrame, p: str, gen: int) -> None:
         time.sleep(1.0)   # batch window – coalesces rapid edits
@@ -757,179 +530,21 @@ def _auto_save() -> None:
                     return
             try:
                 save_df(df_copy, p)
-                _excel_result["status"] = "ok"
-                _excel_result["error"]  = None
+                _set_excel_result_finished(gen)
                 _log.info("Excel save gen %d complete", gen)
             except Exception as exc:
-                _excel_result["status"] = "error"
-                _excel_result["error"]  = str(exc)
+                _set_excel_result_finished(gen, error=str(exc))
                 _log.error("Excel save gen %d failed: %s", gen, exc)
 
     threading.Thread(
         target=_worker, args=(df_snapshot, path, my_gen), daemon=True
     ).start()
-
-
-# ── Frozen-base / edit-sync helpers ───────────────────────────────────────────
-#
-# Frozen-base invariant:
-#   The DataFrame passed to st.data_editor is NEVER modified after creation.
-#   Streamlit accumulates edited_rows as a delta on the base it last received.
-#   If the base changes between renders, Streamlit discards all accumulated
-#   edited_rows — causing the "second click disappears" bug.  Keeping the
-#   base frozen (and the widget key stable) prevents any such reset.
-#
-# Why we do NOT bump pl_version on every commit:
-#   A version bump → new key → Streamlit mounts a NEW widget → DOM remount
-#   → scroll position lost → visible table flicker on every click.
-#   Instead the same widget instance is reused across all clicks.
-#   The visual stays correct because edited_rows accumulates the full delta
-#   from the frozen_base and is never discarded (stable key + stable base).
-#   pl_version is bumped ONLY on intentional full-rebuilds (undo, file-load).
-
-def _get_frozen_base(key: str, initial: pd.DataFrame) -> pd.DataFrame:
-    """
-    Return the frozen base for *key*, creating it from *initial* if absent.
-
-    *initial* is always passed as a view derived from CURRENT pl_df, so a
-    fresh base starts visually identical to pl_df.
-
-    On new version key: stale bases with the same prefix are evicted so
-    session_state doesn't grow indefinitely.
-    """
-    if key not in st.session_state:
-        prefix = key.rsplit("_", 1)[0] + "_"
-        stale  = [k for k in st.session_state if k.startswith(prefix) and k != key]
-        for k in stale:
-            _log.debug("Evicting stale frozen base: %s", k)
-            del st.session_state[k]
-        st.session_state[key] = initial.copy()
-        _log.debug("Created frozen base %s (%d rows)", key, len(initial))
-    return st.session_state[key]
-
-
-def _sync_edits(editor_key: str, frozen_base: pd.DataFrame) -> None:
-    """
-    Apply new differences from edited_rows into pl_df.
-    pl_version is NOT bumped — the same widget key and frozen_base are reused
-    on the next fragment run so the editor stays alive without a remount.
-    """
-    state = st.session_state.get(editor_key)
-    if not isinstance(state, dict):
-        return
-    edited_rows: dict = state.get("edited_rows", {})
-    if not edited_rows:
-        return
-
-    df             = st.session_state["pl_df"]
-    history_pushed = False
-    changed_cells: list = []
-
-    for pos_key, changes in edited_rows.items():
-        pos = int(pos_key)
-        if pos >= len(frozen_base):
-            continue
-        df_idx = frozen_base.index[pos]
-        for col, new_val in changes.items():
-            if col not in df.columns:
-                continue
-            old_val = df.at[df_idx, col]
-            if old_val != new_val:
-                if not history_pushed:
-                    _push_history()
-                    history_pushed = True
-                df.at[df_idx, col] = new_val
-                changed_cells.append((df_idx, col, old_val, new_val))
-
-    if history_pushed:
-        _log.info(
-            "Commit %s: ver=%d, cells=%s",
-            editor_key, st.session_state["pl_version"],
-            [(idx, c, f"{ov!r}→{nv!r}") for idx, c, ov, nv in changed_cells],
-        )
-        _auto_save()
-        # Kein st.rerun() hier — on_change-Callbacks ignorieren Rerun (No-Op).
-        # Fragment ruft _flush_full_rerun_after_editor_commit() auf.
-        st.session_state["_pl_rerun_after_commit"] = True
-
-
-def _sync_verladen(editor_key: str, frozen_base: pd.DataFrame) -> None:
-    """
-    Like _sync_edits but propagates Verladen to every row sharing the same
-    Bereich + Kategorie.  pl_version is NOT bumped — widget stays alive.
-    """
-    state = st.session_state.get(editor_key)
-    if not isinstance(state, dict):
-        return
-    edited_rows: dict = state.get("edited_rows", {})
-    if not edited_rows:
-        return
-
-    df             = st.session_state["pl_df"]
-    history_pushed = False
-    changed_groups: list = []
-
-    for pos_key, changes in edited_rows.items():
-        pos = int(pos_key)
-        if pos >= len(frozen_base):
-            continue
-        bereich   = frozen_base.iloc[pos]["Bereich"]
-        kategorie = frozen_base.iloc[pos]["Kategorie"]
-        new_val   = bool(changes.get("Verladen", frozen_base.iloc[pos]["Verladen"]))
-        mask      = (df["Bereich"] == bereich) & (df["Kategorie"] == kategorie)
-        if not (df.loc[mask, "Verladen"] == new_val).all():
-            if not history_pushed:
-                _push_history()
-                history_pushed = True
-            df.loc[mask, "Verladen"] = new_val
-            changed_groups.append((bereich, kategorie, new_val))
-
-    if history_pushed:
-        _log.info(
-            "Commit %s: ver=%d, verladen groups=%s",
-            editor_key, st.session_state["pl_version"],
-            [(b, k, nv) for b, k, nv in changed_groups],
-        )
-        _auto_save()
-        st.session_state["_pl_rerun_after_commit"] = True
-
-
-def _flush_full_rerun_after_editor_commit() -> None:
-    """Nach Editor-Commit: voller Rerun, damit Header (Undo) pl_history sieht."""
-    if st.session_state.pop("_pl_rerun_after_commit", False):
-        st.rerun()
-
-
-# ── Callback factory ───────────────────────────────────────────────────────────
-
-def _make_callback(editor_key: str, frozen_base: pd.DataFrame,
-                   verladen: bool = False):
-    """
-    Returns an on_change callback for a data_editor.
-
-    Streamlit calls this callback BEFORE the fragment body re-executes.
-    The callback commits changes to pl_df and triggers autosave.
-    pl_version is NOT bumped → same key → same widget instance is reused →
-    no remount, no scroll reset.
-
-    The frozen_base reference is captured at creation time.  Since it is
-    never modified (frozen-base invariant), it stays valid for all future
-    invocations of this callback.
-    """
-    def _cb() -> None:
-        if verladen:
-            _sync_verladen(editor_key, frozen_base)
-        else:
-            _sync_edits(editor_key, frozen_base)
-    return _cb
+    return my_gen
 
 
 # ── Session-state init ─────────────────────────────────────────────────────────
 
-for _k, _v in [("pl_df", None), ("pl_path", DEFAULT_PATH),
-               ("pl_version", 0), ("pl_history", []), ("pl_redo_stack", [])]:
-    if _k not in st.session_state:
-        st.session_state[_k] = _v
+init_session_state(st.session_state, DEFAULT_PATH)
 
 
 # ── Auto-load on startup / browser-refresh ─────────────────────────────────────
@@ -937,26 +552,28 @@ for _k, _v in [("pl_df", None), ("pl_path", DEFAULT_PATH),
 
 if st.session_state["pl_df"] is None:
     _path = load_last_active_path()
-    try:
-        _df, _src = restore_state_for_path(_path)
-        st.session_state["pl_df"]      = _df
-        st.session_state["pl_path"]    = _path
-        st.session_state["pl_version"] = 1
-        save_last_active_path(_path)
-        if _src == "sidecar":
-            st.session_state["_al_msg"] = "🔄 Stand aus Autosave wiederhergestellt."
-            _auto_save()   # sync sidecar state back to Excel in background
-    except Exception as _exc:
-        st.session_state["_al_err"] = str(_exc)
+    if _path:
+        try:
+            _df, _src = restore_state_for_path(_path)
+            st.session_state["pl_df"]      = _df
+            st.session_state["pl_path"]    = _path
+            st.session_state["pl_version"] = 1
+            save_last_active_path(_path)
+            if _src == "sidecar":
+                st.session_state["_al_msg"] = "🔄 Stand aus Autosave wiederhergestellt."
+                _auto_save()   # sync sidecar state back to Excel in background
+        except Exception as _exc:
+            st.session_state["_al_err"] = str(_exc)
 
 
 # ── Header ─────────────────────────────────────────────────────────────────────
 # Minimal: title + save status + undo.
 # Global metrics are in the "Übersicht" tab → not part of the click flow.
 
-if _excel_result["status"] == "error":
-    st.session_state["pl_excel_err"] = _excel_result["error"]
-elif _excel_result["status"] == "ok":
+_excel_result_snapshot = _get_excel_result_snapshot()
+if _excel_result_snapshot["status"] == "error":
+    st.session_state["pl_excel_err"] = _excel_result_snapshot["error"]
+elif _excel_result_snapshot["status"] == "ok":
     st.session_state.pop("pl_excel_err", None)
 
 apply_page_title_style()
@@ -976,49 +593,39 @@ with btn_col:
                      help="Speichern"):
             # Neuen Speicherversuch starten (Retry), damit ein zuvor fehlgeschlagener
             # Save nach Schließen der Excel-Datei erneut versucht wird.
+            save_result = None
             if st.session_state.get("pl_df") is not None:
-                _auto_save()
-            time.sleep(1.8)   # warten bis Hintergrund-Thread Schreibversuch abgeschlossen hat
-            # _excel_result direkt lesen (nach sleep aktuell vom Thread befüllt)
-            if st.session_state.get("pl_sidecar_err"):
-                st.markdown(_CRITICAL_TOAST_CSS, unsafe_allow_html=True)
-                st.toast("Autosave-Fehler!")
-            elif _excel_result["status"] == "error":
-                st.session_state["pl_excel_err"] = _excel_result["error"]
-                st.markdown(_ERROR_TOAST_CSS, unsafe_allow_html=True)
-                st.toast("Excel nicht aktualisiert – Excel-Datei schließen und erneut speichern")
-            elif _excel_result["status"] == "saving":
-                st.toast("⏳ Speichern läuft noch…")
-            else:
-                st.session_state.pop("pl_excel_err", None)
-                st.markdown(_SUCCESS_TOAST_CSS, unsafe_allow_html=True)
-                st.toast("Gespeichert")
+                save_gen = _auto_save()
+                save_result = _wait_for_excel_result(save_gen)
+            if save_result is not None:
+                if st.session_state.get("pl_sidecar_err"):
+                    st.markdown(_CRITICAL_TOAST_CSS, unsafe_allow_html=True)
+                    st.toast("Autosave-Fehler!")
+                elif save_result["completed_gen"] < save_gen or save_result["status"] == "saving":
+                    st.toast("⏳ Speichern läuft noch…")
+                elif save_result["status"] == "error":
+                    st.session_state["pl_excel_err"] = save_result["error"]
+                    st.markdown(_ERROR_TOAST_CSS, unsafe_allow_html=True)
+                    st.toast("Excel nicht aktualisiert – Excel-Datei schließen und erneut speichern")
+                else:
+                    st.session_state.pop("pl_excel_err", None)
+                    st.markdown(_SUCCESS_TOAST_CSS, unsafe_allow_html=True)
+                    st.toast("Gespeichert")
     with undo_col:
         undo_label = "↩"
         if st.button(undo_label, disabled=(hist_len == 0),
                      use_container_width=True, key="undo_btn",
                      help="Letzte Änderung rückgängig machen"):
-            redo = st.session_state.setdefault("pl_redo_stack", [])
-            redo.append(st.session_state["pl_df"].copy())
-            if len(redo) > MAX_HISTORY:
-                redo.pop(0)
-            prev = st.session_state["pl_history"].pop()
-            st.session_state["pl_df"]      = prev
-            st.session_state["pl_version"] += 1
-            _auto_save()
-            st.rerun()
+            if apply_undo(st.session_state, MAX_HISTORY):
+                _auto_save()
+                st.rerun()
     with redo_col:
         if st.button("↪", disabled=(redo_len == 0),
                      use_container_width=True, key="redo_btn",
                      help="Wiederherstellen"):
-            hist = st.session_state.setdefault("pl_history", [])
-            hist.append(st.session_state["pl_df"].copy())
-            if len(hist) > MAX_HISTORY:
-                hist.pop(0)
-            st.session_state["pl_df"] = st.session_state["pl_redo_stack"].pop()
-            st.session_state["pl_version"] += 1
-            _auto_save()
-            st.rerun()
+            if apply_redo(st.session_state, MAX_HISTORY):
+                _auto_save()
+                st.rerun()
 
     with export_col:
         if st.session_state.get("pl_df") is not None:
@@ -1071,14 +678,14 @@ if st.session_state.get("pl_df") is not None:
 
         if apply_editor_changes:
             current_df = st.session_state["pl_df"].reset_index(drop=True)
-            edited_df = _normalize_editor_mode_df(editor_df, current_df.columns)
-            edited_df = _drop_fully_empty_editor_rows(edited_df)
-            current_norm = _normalize_editor_mode_df(current_df, current_df.columns)
+            edited_df = normalize_editor_mode_df(editor_df, current_df.columns, CHECKBOX_COLS)
+            edited_df = drop_fully_empty_editor_rows(edited_df, CHECKBOX_COLS)
+            current_norm = normalize_editor_mode_df(current_df, current_df.columns, CHECKBOX_COLS)
 
             if edited_df.equals(current_norm):
                 st.info("Keine Aenderungen zum Uebernehmen.")
             else:
-                _push_history()
+                push_history(st.session_state, MAX_HISTORY)
                 st.session_state["pl_df"] = edited_df
                 st.session_state["pl_version"] += 1
                 _auto_save()
@@ -1143,7 +750,7 @@ tab_pack, tab_verl, tab_ers, tab_ueb, tab_def = st.tabs(
 
 @st.fragment
 def _frag_packen() -> None:
-    _flush_full_rerun_after_editor_commit()
+    flush_full_rerun_after_editor_commit(st.session_state, rerun=st.rerun)
     ver  = st.session_state["pl_version"]
     df   = st.session_state["pl_df"]
     pcfg = {
@@ -1159,8 +766,11 @@ def _frag_packen() -> None:
     cr     = ["Bereich", "Gegenstand", "Menge", "Kategorie", "Verpackt"]
     bk_r   = f"b_rein_{ver}"
     view_r = df.loc[df["Reinigung"].astype(bool), cr].sort_values("Bereich")
-    base_r = _get_frozen_base(
-        bk_r, view_r
+    base_r = get_frozen_base(
+        st.session_state,
+        bk_r,
+        view_r,
+        logger=_log,
     )
     ek_r = f"e_rein_{ver}"
     if base_r.empty:
@@ -1171,7 +781,15 @@ def _frag_packen() -> None:
             base_r, key=ek_r, use_container_width=True,
             hide_index=True, num_rows="fixed",
             height=_table_height_for_rows(len(base_r), min_rows=6, max_rows=14),
-            on_change=_make_callback(ek_r, base_r),
+            on_change=make_callback(
+                st.session_state,
+                ek_r,
+                base_r,
+                push_history=push_history,
+                max_history=MAX_HISTORY,
+                autosave=_auto_save,
+                logger=_log,
+            ),
             column_config={k: v for k, v in pcfg.items() if k in cr},
         )
     st.divider()
@@ -1181,8 +799,11 @@ def _frag_packen() -> None:
     cn     = ["Bereich", "Gegenstand", "Menge", "Kategorie", "Verpackt"]
     bk_n   = f"b_nach_{ver}"
     view_n = df.loc[df["Nachfüllen"].astype(bool), cn].sort_values("Bereich")
-    base_n = _get_frozen_base(
-        bk_n, view_n
+    base_n = get_frozen_base(
+        st.session_state,
+        bk_n,
+        view_n,
+        logger=_log,
     )
     ek_n = f"e_nach_{ver}"
     if base_n.empty:
@@ -1193,7 +814,15 @@ def _frag_packen() -> None:
             base_n, key=ek_n, use_container_width=True,
             hide_index=True, num_rows="fixed",
             height=_table_height_for_rows(len(base_n), min_rows=6, max_rows=14),
-            on_change=_make_callback(ek_n, base_n),
+            on_change=make_callback(
+                st.session_state,
+                ek_n,
+                base_n,
+                push_history=push_history,
+                max_history=MAX_HISTORY,
+                autosave=_auto_save,
+                logger=_log,
+            ),
             column_config={k: v for k, v in pcfg.items() if k in cn},
         )
     st.divider()
@@ -1203,8 +832,11 @@ def _frag_packen() -> None:
     ce     = ["Bereich", "Gegenstand", "Menge", "Kategorie", "Verpackt"]
     bk_e   = f"b_event_{ver}"
     view_e = df.loc[df["kurz vor Event packen"].astype(bool), ce].sort_values("Bereich")
-    base_e = _get_frozen_base(
-        bk_e, view_e
+    base_e = get_frozen_base(
+        st.session_state,
+        bk_e,
+        view_e,
+        logger=_log,
     )
     ek_e = f"e_event_{ver}"
     if base_e.empty:
@@ -1215,29 +847,48 @@ def _frag_packen() -> None:
             base_e, key=ek_e, use_container_width=True,
             hide_index=True, num_rows="fixed",
             height=_table_height_for_rows(len(base_e), min_rows=6, max_rows=14),
-            on_change=_make_callback(ek_e, base_e),
+            on_change=make_callback(
+                st.session_state,
+                ek_e,
+                base_e,
+                push_history=push_history,
+                max_history=MAX_HISTORY,
+                autosave=_auto_save,
+                logger=_log,
+            ),
             column_config={k: v for k, v in pcfg.items() if k in ce},
         )
 
 @st.fragment
 def _frag_verladen() -> None:
-    _flush_full_rerun_after_editor_commit()
+    flush_full_rerun_after_editor_commit(st.session_state, rerun=st.rerun)
     ver   = st.session_state["pl_version"]
     df    = st.session_state["pl_df"]
     view_v = (
         df.groupby(["Bereich", "Kategorie"], sort=True)["Verladen"].first().reset_index()
     )
     bk_v   = f"b_verl_{ver}"
-    base_v = _get_frozen_base(
+    base_v = get_frozen_base(
+        st.session_state,
         bk_v,
         view_v,
+        logger=_log,
     )
     ek_v = f"e_verl_{ver}"
     st.data_editor(
         base_v, key=ek_v, use_container_width=True,
         hide_index=True, num_rows="fixed",
         height=_table_height_for_rows(len(base_v), min_rows=6, max_rows=14),
-        on_change=_make_callback(ek_v, base_v, verladen=True),
+        on_change=make_callback(
+            st.session_state,
+            ek_v,
+            base_v,
+            push_history=push_history,
+            max_history=MAX_HISTORY,
+            autosave=_auto_save,
+            logger=_log,
+            verladen=True,
+        ),
         column_config={
             "Bereich":   _cc_text("Bereich",   width="small"),
             "Kategorie": _cc_text("Kategorie", width="small"),
@@ -1247,7 +898,7 @@ def _frag_verladen() -> None:
 
 @st.fragment
 def _frag_ersetzen() -> None:
-    _flush_full_rerun_after_editor_commit()
+    flush_full_rerun_after_editor_commit(st.session_state, rerun=st.rerun)
     ver      = st.session_state["pl_version"]
     df       = st.session_state["pl_df"]
     st.subheader("Gebrauchsgegenstände")
@@ -1255,8 +906,11 @@ def _frag_ersetzen() -> None:
     cols_e   = ["Bereich", "Gegenstand", "Notizen"]
     bk_ers   = f"b_ers_{ver}"
     view_ers = df.loc[~df["Nachfüllen"].astype(bool), cols_e].sort_values("Bereich")
-    base_ers = _get_frozen_base(
-        bk_ers, view_ers
+    base_ers = get_frozen_base(
+        st.session_state,
+        bk_ers,
+        view_ers,
+        logger=_log,
     )
     ek_ers = f"e_ers_{ver}"
     if base_ers.empty:
@@ -1267,7 +921,15 @@ def _frag_ersetzen() -> None:
             base_ers, key=ek_ers, use_container_width=True,
             hide_index=True, num_rows="fixed",
             height=_table_height_for_rows(len(base_ers), min_rows=6, max_rows=14),
-            on_change=_make_callback(ek_ers, base_ers),
+            on_change=make_callback(
+                st.session_state,
+                ek_ers,
+                base_ers,
+                push_history=push_history,
+                max_history=MAX_HISTORY,
+                autosave=_auto_save,
+                logger=_log,
+            ),
             column_config={
                 "Bereich":    _cc_text("Bereich",    width="small"),
                 "Gegenstand": _cc_text("Gegenstand", width="medium"),
@@ -1277,19 +939,27 @@ def _frag_ersetzen() -> None:
 
 @st.fragment
 def _frag_definitionen() -> None:
-    _flush_full_rerun_after_editor_commit()
+    flush_full_rerun_after_editor_commit(st.session_state, rerun=st.rerun)
     ver  = st.session_state["pl_version"]
     df   = st.session_state["pl_df"]
     cols = ["Gegenstand", "Beschreibung", "Bereich"]
     bk   = f"b_def_{ver}"
     view_def = df[cols].sort_values("Bereich")
-    base = _get_frozen_base(bk, view_def)
+    base = get_frozen_base(st.session_state, bk, view_def, logger=_log)
     ek   = f"e_def_{ver}"
     st.data_editor(
         base, key=ek, use_container_width=True,
         hide_index=True, num_rows="fixed",
         height=_table_height_for_rows(len(base), min_rows=6, max_rows=14),
-        on_change=_make_callback(ek, base),
+        on_change=make_callback(
+            st.session_state,
+            ek,
+            base,
+            push_history=push_history,
+            max_history=MAX_HISTORY,
+            autosave=_auto_save,
+            logger=_log,
+        ),
         column_config={
             "Gegenstand":   _cc_text("Gegenstand",   width="medium"),
             "Beschreibung": _cc_text("Beschreibung", width="large"),

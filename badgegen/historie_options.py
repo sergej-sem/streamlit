@@ -1,21 +1,7 @@
 # badgegen/historie_options.py
 from typing import List, Tuple
-import requests
 
-from badgegen.hubspot_search import HubSpotAPIError
-
-HUBSPOT_BASE = "https://api.hubapi.com"
-
-
-def hs_get(token: str, path: str) -> dict:
-    r = requests.get(
-        f"{HUBSPOT_BASE}{path}",
-        headers={"Authorization": f"Bearer {token}"},
-        timeout=30,
-    )
-    if r.status_code >= 400:
-        raise HubSpotAPIError(r.status_code, f"HubSpot GET {path} failed: {r.status_code} {r.text[:800]}")
-    return r.json()
+from shared.hubspot import fetch_property_options
 
 def fetch_historie_options(token: str, historie_property: str = "historie") -> List[Tuple[str, str]]:
     """
@@ -24,17 +10,11 @@ def fetch_historie_options(token: str, historie_property: str = "historie") -> L
     Falls keine Options vorhanden / Scope fehlt -> [].
     """
     try:
-        data = hs_get(token, f"/crm/v3/properties/contacts/{historie_property}")
-        options = data.get("options", []) or []
-        out: List[Tuple[str, str]] = []
-        for o in options:
-            if o.get("hidden"):
-                continue
-            label = (o.get("label") or "").strip()
-            value = (o.get("value") or "").strip()
-            if label and value:
-                out.append((label, value))
-        return out
+        return fetch_property_options(
+            historie_property,
+            token=token,
+            object_type="contacts",
+        )
     except Exception:
         return []
 

@@ -19,13 +19,15 @@ from badgegen.historie_options import fetch_historie_options
 from badgegen.category import derive_kategorie_from_historie, ALLOWED_CATEGORIES
 from badgegen.render_pdf import render_badges_pdf_bytes
 from badgegen.filter_builder import render_filter_builder
+from shared.config import ConfigError, get_hubspot_token
 from streamlit_ui import render_page_title
 
 st.set_page_config(page_title="Badge Generator (HubSpot)", layout="wide")
 render_page_title("Badge Generator (HubSpot)")
 
-token = st.secrets.get("HUBSPOT_TOKEN")
-if not token:
+try:
+    token = get_hubspot_token(st.secrets)
+except ConfigError:
     st.error("❌ HUBSPOT_TOKEN fehlt. Lege ihn in .streamlit/secrets.toml ab.")
     st.stop()
 

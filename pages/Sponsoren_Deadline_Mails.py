@@ -8,6 +8,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 from streamlit_searchbox import st_searchbox
 
+from shared.config import ConfigError, load_imap_draft_settings
 from sponsor_deadline_mails import (
     DEFAULT_EVENT_CITY,
     DEFAULT_EVENT_END,
@@ -79,15 +80,6 @@ def _make_file_token(file_name: str, excel_bytes: bytes) -> str:
     return f"{file_name}:{len(excel_bytes)}:{digest}"
 
 
-def _secret_bool(section, key: str, default: bool) -> bool:
-    value = section.get(key, default)
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        return value.strip().lower() in {"1", "true", "yes", "on"}
-    return bool(value)
-
-
 def _search_sender_emails(searchterm: str) -> list[str]:
     term = (searchterm or "").strip().lower()
     if not term:
@@ -105,21 +97,18 @@ def _search_sender_emails(searchterm: str) -> list[str]:
 
 
 def _load_base_imap_config() -> ImapDraftConfig | None:
-    if "mse_imap_mail_drafts" not in st.secrets:
-        return None
-
-    section = st.secrets["mse_imap_mail_drafts"]
-    required_keys = ("host", "port")
-    if not all(key in section for key in required_keys):
+    try:
+        settings = load_imap_draft_settings(st.secrets)
+    except ConfigError:
         return None
 
     return ImapDraftConfig(
-        host=str(section["host"]).strip(),
-        port=int(section["port"]),
+        host=settings.host,
+        port=settings.port,
         username="",
         password="",
-        drafts_folder=str(section.get("drafts_folder", "Drafts")).strip() or "Drafts",
-        use_ssl=_secret_bool(section, "use_ssl", True),
+        drafts_folder=settings.drafts_folder,
+        use_ssl=settings.use_ssl,
     )
 
 
