@@ -80,6 +80,7 @@ Row identity
 """
 
 import logging
+import os
 import threading
 import time
 from functools import partial
@@ -182,27 +183,20 @@ REQUIRED_COLS = [
 # Persists last-active Excel path across browser refreshes
 _META_FILE = Path(__file__).parent / ".packliste_meta.json"
 
-# ── Thread-shared state (persisted via cache_resource across reruns) ──────────
+# ── Thread-shared save state (isolated per Excel path) ───────────────────────
 #
-# Streamlit re-executes the entire script on every rerun.  A plain module-level
-# assignment like `_excel_result = {...}` would therefore RESET the dict to
-# {"status": "ok"} on every rerun — the background thread's "error" result
-# would be lost immediately and the save button would always show "Gespeichert".
-# The same reset would zero out _save_gen, causing the gen-check inside the
-# worker to fail (thread gen ≠ 0) and skip the write entirely.
-#
-# st.cache_resource returns the SAME object on every rerun, so the background
-# thread and the current script run always share the identical dict / list /
-# Lock instances.
+# Streamlit re-executes the script on every rerun, so runtime save state must
+# live in a cached resource. We keep that model, but store one isolated state
+# per normalized Excel path to reduce cross-file interference between sessions.
 
-@st.cache_resource
-def _get_thread_state() -> dict:
+
+def _make_save_runtime_state() -> dict:
     return {
-        "save_lock":     threading.Lock(),
+        "save_lock": threading.Lock(),
         "save_gen_lock": threading.Lock(),
-        "save_gen":      [0],
+        "save_gen": [0],
         "excel_result_lock": threading.Lock(),
-        "excel_result":  {
+        "excel_result": {
             "status": "idle",
             "error": None,
             "active_gen": 0,
@@ -211,19 +205,34 @@ def _get_thread_state() -> dict:
         },
     }
 
-_ts            = _get_thread_state()
-_ts.setdefault("excel_result_lock", threading.Lock())
-_ts.setdefault("excel_result", {})
-_ts["excel_result"].setdefault("status", "idle")
-_ts["excel_result"].setdefault("error", None)
-_ts["excel_result"].setdefault("active_gen", 0)
-_ts["excel_result"].setdefault("completed_gen", 0)
-_ts["excel_result"].setdefault("updated_at", 0.0)
-_save_lock     = _ts["save_lock"]
-_save_gen_lock = _ts["save_gen_lock"]
-_save_gen      = _ts["save_gen"]
-_excel_result_lock = _ts["excel_result_lock"]
-_excel_result  = _ts["excel_result"]
+
+def _save_runtime_key(path: str | None) -> str:
+    if not path:
+        return "__no_path__"
+    try:
+        normalized = Path(path).expanduser().resolve(strict=False)
+    except Exception:
+        normalized = Path(path).expanduser()
+    return os.path.normcase(str(normalized))
+
+
+@st.cache_resource
+def _get_save_runtime_store() -> dict:
+    return {
+        "lock": threading.Lock(),
+        "states": {},
+    }
+
+
+def _get_save_runtime_state(path: str | None) -> dict:
+    store = _get_save_runtime_store()
+    key = _save_runtime_key(path)
+    with store["lock"]:
+        state = store["states"].get(key)
+        if state is None:
+            state = _make_save_runtime_state()
+            store["states"][key] = state
+        return state
 
 # -- Meta-file helpers (last-active path) -------------------------------
 
@@ -451,44 +460,55 @@ def _render_overview_stats_df(
 
 # ── Two-stage save pipeline ────────────────────────────────────────────────────
 
-def _set_excel_result_saving(gen: int) -> None:
-    with _excel_result_lock:
-        _excel_result["status"] = "saving"
-        _excel_result["error"] = None
-        _excel_result["active_gen"] = gen
-        _excel_result["updated_at"] = time.time()
+def _set_excel_result_saving(path: str | None, gen: int) -> None:
+    state = _get_save_runtime_state(path)
+    with state["excel_result_lock"]:
+        result = state["excel_result"]
+        result["status"] = "saving"
+        result["error"] = None
+        result["active_gen"] = gen
+        result["updated_at"] = time.time()
 
 
-def _set_excel_result_finished(gen: int, *, error: str | None = None) -> None:
-    with _excel_result_lock:
-        if gen != _excel_result.get("active_gen", 0):
+def _set_excel_result_finished(
+    path: str | None,
+    gen: int,
+    *,
+    error: str | None = None,
+) -> None:
+    state = _get_save_runtime_state(path)
+    with state["excel_result_lock"]:
+        result = state["excel_result"]
+        if gen != result.get("active_gen", 0):
             return
-        _excel_result["status"] = "error" if error else "ok"
-        _excel_result["error"] = error
-        _excel_result["completed_gen"] = gen
-        _excel_result["updated_at"] = time.time()
+        result["status"] = "error" if error else "ok"
+        result["error"] = error
+        result["completed_gen"] = gen
+        result["updated_at"] = time.time()
 
 
-def _get_excel_result_snapshot() -> dict:
-    with _excel_result_lock:
-        return dict(_excel_result)
+def _get_excel_result_snapshot(path: str | None) -> dict:
+    state = _get_save_runtime_state(path)
+    with state["excel_result_lock"]:
+        return dict(state["excel_result"])
 
 
 def _wait_for_excel_result(
+    path: str | None,
     gen: int,
     *,
     timeout_s: float = 4.0,
     poll_s: float = 0.05,
 ) -> dict:
     deadline = time.monotonic() + timeout_s
-    snapshot = _get_excel_result_snapshot()
+    snapshot = _get_excel_result_snapshot(path)
     while snapshot.get("completed_gen", 0) < gen and time.monotonic() < deadline:
         time.sleep(poll_s)
-        snapshot = _get_excel_result_snapshot()
+        snapshot = _get_excel_result_snapshot(path)
     return snapshot
 
 
-def _auto_save() -> int:
+def _auto_save() -> int | None:
     """
     Stage 1 – Sidecar (sync, ~1 ms):
         Atomic pickle.  Data survives any refresh from this point on.
@@ -498,8 +518,21 @@ def _auto_save() -> int:
         Only the latest generation writes; older snapshots are dropped.
         No st.* calls inside the worker.
     """
-    df_snapshot = st.session_state["pl_df"].copy()
-    path        = st.session_state["pl_path"]
+    df_current = st.session_state.get("pl_df")
+    path = st.session_state.get("pl_path")
+    if df_current is None or not path:
+        _log.warning(
+            "Autosave skipped: missing file context (path=%r, has_df=%s)",
+            path,
+            df_current is not None,
+        )
+        return None
+
+    df_snapshot = df_current.copy()
+    runtime_state = _get_save_runtime_state(path)
+    save_lock = runtime_state["save_lock"]
+    save_gen_lock = runtime_state["save_gen_lock"]
+    save_gen = runtime_state["save_gen"]
 
     # Stage 1: synchronous sidecar ────────────────────────────────────────────
     try:
@@ -512,28 +545,32 @@ def _auto_save() -> int:
         st.toast(f"⚠️ Autosave-Fehler – Refresh könnte Daten verlieren: {msg}", icon="⚠️")
 
     # Stage 2: async Excel ────────────────────────────────────────────────────
-    with _save_gen_lock:
-        _save_gen[0] += 1
-        my_gen = _save_gen[0]
-    _set_excel_result_saving(my_gen)
+    with save_gen_lock:
+        save_gen[0] += 1
+        my_gen = save_gen[0]
+    _set_excel_result_saving(path, my_gen)
 
     def _worker(df_copy: pd.DataFrame, p: str, gen: int) -> None:
         time.sleep(1.0)   # batch window – coalesces rapid edits
-        with _save_gen_lock:
-            if gen != _save_gen[0]:
+        worker_state = _get_save_runtime_state(p)
+        worker_save_gen_lock = worker_state["save_gen_lock"]
+        worker_save_gen = worker_state["save_gen"]
+        worker_save_lock = worker_state["save_lock"]
+        with worker_save_gen_lock:
+            if gen != worker_save_gen[0]:
                 _log.info("Excel save gen %d superseded by %d – skipped",
-                          gen, _save_gen[0])
+                          gen, worker_save_gen[0])
                 return
-        with _save_lock:
-            with _save_gen_lock:
-                if gen != _save_gen[0]:
+        with worker_save_lock:
+            with worker_save_gen_lock:
+                if gen != worker_save_gen[0]:
                     return
             try:
                 save_df(df_copy, p)
-                _set_excel_result_finished(gen)
+                _set_excel_result_finished(p, gen)
                 _log.info("Excel save gen %d complete", gen)
             except Exception as exc:
-                _set_excel_result_finished(gen, error=str(exc))
+                _set_excel_result_finished(p, gen, error=str(exc))
                 _log.error("Excel save gen %d failed: %s", gen, exc)
 
     threading.Thread(
@@ -558,7 +595,8 @@ if st.session_state["pl_df"] is None:
             st.session_state["pl_df"]      = _df
             st.session_state["pl_path"]    = _path
             st.session_state["pl_version"] = 1
-            save_last_active_path(_path)
+            st.session_state.pop("pl_sidecar_err", None)
+            st.session_state.pop("pl_excel_err", None)
             if _src == "sidecar":
                 st.session_state["_al_msg"] = "🔄 Stand aus Autosave wiederhergestellt."
                 _auto_save()   # sync sidecar state back to Excel in background
@@ -570,7 +608,7 @@ if st.session_state["pl_df"] is None:
 # Minimal: title + save status + undo.
 # Global metrics are in the "Übersicht" tab → not part of the click flow.
 
-_excel_result_snapshot = _get_excel_result_snapshot()
+_excel_result_snapshot = _get_excel_result_snapshot(st.session_state.get("pl_path"))
 if _excel_result_snapshot["status"] == "error":
     st.session_state["pl_excel_err"] = _excel_result_snapshot["error"]
 elif _excel_result_snapshot["status"] == "ok":
@@ -594,9 +632,14 @@ with btn_col:
             # Neuen Speicherversuch starten (Retry), damit ein zuvor fehlgeschlagener
             # Save nach Schließen der Excel-Datei erneut versucht wird.
             save_result = None
+            save_gen = None
             if st.session_state.get("pl_df") is not None:
                 save_gen = _auto_save()
-                save_result = _wait_for_excel_result(save_gen)
+                if save_gen is not None:
+                    save_result = _wait_for_excel_result(
+                        st.session_state.get("pl_path"),
+                        save_gen,
+                    )
             if save_result is not None:
                 if st.session_state.get("pl_sidecar_err"):
                     st.markdown(_CRITICAL_TOAST_CSS, unsafe_allow_html=True)
@@ -708,6 +751,8 @@ with st.expander(
             new_df = load_df(path_input)
             _write_sidecar(new_df, path_input)
             save_last_active_path(path_input)
+            st.session_state.pop("pl_sidecar_err", None)
+            st.session_state.pop("pl_excel_err", None)
             st.session_state["pl_df"]      = new_df
             st.session_state["pl_path"]    = path_input
             st.session_state["pl_version"] += 1

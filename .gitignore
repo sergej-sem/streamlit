@@ -1,6 +1,10 @@
 # secrets
 .streamlit/secrets.toml
+
+# Packliste runtime files
 pages/.packliste_meta.json
+*_autosave.pkl
+*.tmp.xlsx
 
 # virtual environment
 .venv/

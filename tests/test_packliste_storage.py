@@ -75,6 +75,22 @@ class PacklisteStorageTests(unittest.TestCase):
 
         self.assertEqual(load_last_active_path(meta_file), "")
 
+    def test_meta_returns_empty_for_directory_target(self) -> None:
+        meta_file = self.base / "meta.json"
+
+        save_last_active_path(meta_file, str(self.base))
+
+        self.assertEqual(load_last_active_path(meta_file), "")
+
+    def test_meta_returns_empty_for_non_xlsx_file(self) -> None:
+        meta_file = self.base / "meta.json"
+        text_file = self.base / "packliste.txt"
+        text_file.write_text("not excel", encoding="utf-8")
+
+        save_last_active_path(meta_file, str(text_file))
+
+        self.assertEqual(load_last_active_path(meta_file), "")
+
     def test_sidecar_roundtrip_reads_dataframe(self) -> None:
         excel_path = str(self.base / "packliste.xlsx")
         df = pd.DataFrame([{"Bereich": "Bar", "Verpackt": True}])

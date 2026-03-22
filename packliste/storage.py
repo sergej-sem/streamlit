@@ -29,7 +29,13 @@ def load_last_active_path(meta_file: Path, *, logger=None) -> str:
             with open(meta_file, "r", encoding="utf-8") as fh:
                 data = json.load(fh)
             path = data.get("path", "")
-            if path and Path(path).exists():
+            candidate = Path(path) if path else None
+            if (
+                candidate
+                and candidate.exists()
+                and candidate.is_file()
+                and candidate.suffix.lower() == ".xlsx"
+            ):
                 return path
     except Exception as exc:
         _warn(logger, "Cannot read meta %s: %s", meta_file, exc)
