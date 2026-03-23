@@ -1,8 +1,6 @@
 import base64
 import io
-import re
 import time
-from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
@@ -16,6 +14,7 @@ from teilnehmerliste_generator.hubspot_client import (
     get_list_members,
     get_contacts_by_ids,
 )
+from teilnehmerliste_generator.output_naming import build_pdf_filename
 from teilnehmerliste_generator.transform import build_teilnehmerliste
 from teilnehmerliste_generator.pdf_render import generate_pdf_bytes
 from streamlit_ui import render_page_title
@@ -34,7 +33,6 @@ FONT_DIR = ROOT_DIR / "fonts"
 TEMPLATE_DIR = ROOT_DIR / "assets" / "vorlagen_teilnehmerlisten"
 
 LISTS_TTL_SECONDS = 300  # auto-refresh alle 5 Minuten (ohne Button)
-KNOWN_SEGMENT_CODES = {"BER", "DOR", "MUC"}
 
 
 def pick_existing(*candidates: Path) -> Path:
@@ -84,53 +82,6 @@ def finalize_pdf_bytes(pdf_bytes: bytes, password: str = "") -> bytes:
     out = io.BytesIO()
     writer.write(out)
     return out.getvalue()
-
-
-def normalize_segment_year(raw_year: str) -> str:
-    if len(raw_year) == 4:
-        return raw_year
-    return f"20{raw_year}"
-
-
-def extract_segment_code_and_year(segment_name: str) -> tuple[str, str]:
-    tokens = [tok for tok in re.split(r"[^A-Za-z0-9]+", segment_name.upper()) if tok]
-
-    for token in tokens:
-        match = re.fullmatch(r"(?P<code>[A-Z]{3})(?P<year>\d{2}|\d{4})", token)
-        if match:
-            return match.group("code"), normalize_segment_year(match.group("year"))
-
-        match = re.fullmatch(r"(?P<year>\d{2}|\d{4})(?P<code>[A-Z]{3})", token)
-        if match:
-            return match.group("code"), normalize_segment_year(match.group("year"))
-
-    for left, right in zip(tokens, tokens[1:]):
-        if re.fullmatch(r"[A-Z]{3}", left) and re.fullmatch(r"\d{2}|\d{4}", right):
-            return left, normalize_segment_year(right)
-        if re.fullmatch(r"\d{2}|\d{4}", left) and re.fullmatch(r"[A-Z]{3}", right):
-            return right, normalize_segment_year(left)
-
-    code = next((tok for tok in tokens if tok in KNOWN_SEGMENT_CODES), "")
-    year_token = next((tok for tok in tokens if re.fullmatch(r"\d{2}|\d{4}", tok)), "")
-    year = normalize_segment_year(year_token) if year_token else ""
-    return code, year
-
-
-def build_pdf_filename(segment_name: str, lang: str, encrypt: bool) -> str:
-    code, year = extract_segment_code_and_year(segment_name)
-    event_part = f"{code}{year}"
-    date_part = datetime.now().strftime("%d%m%Y")
-
-    parts = ["mse", "Teilnehmerliste"]
-    if event_part:
-        parts.append(event_part)
-    if lang:
-        parts.append(lang.upper())
-    parts.append(date_part)
-    if encrypt:
-        parts.append("PW")
-
-    return f"{'_'.join(parts)}.pdf"
 
 
 def fetch_lists_map() -> dict[str, str]:
