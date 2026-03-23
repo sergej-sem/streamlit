@@ -124,6 +124,7 @@ def ensure_filter_builder_state(state_key: str = "hs_filter_builder") -> None:
         st.session_state[state_key] = _default_model()
 
 def _build_context_filter_groups_for_group(group_filters: List[Dict[str, Any]], exclude_filter_id: str) -> List[Dict[str, Any]]:
+    """Build context filter groups for autofill without the active filter itself."""
     partials: List[List[Dict[str, str]]] = [[]]
 
     for f in group_filters:
@@ -168,6 +169,7 @@ def _request_set_next_run(widget_key: str, value: str) -> None:
     st.session_state[_set_flag_key(widget_key)] = value
 
 def build_compiled_groups_from_model(model: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Normalize the UI filter model into search_compiled_groups-ready groups."""
     compiled: List[Dict[str, Any]] = []
 
     for g in model or []:
@@ -200,13 +202,22 @@ def build_compiled_groups_from_model(model: List[Dict[str, Any]]) -> List[Dict[s
         if historie_values and len(historie_values) > 1:
             for hv in historie_values:
                 compiled.append(
-                    {"id": g.get("id"), "server_filters": base_server_filters + [_filter_dict(P_HISTORIE, historie_op, hv)],
-                     "local_contains": local_contains}
+                    {
+                        "id": g.get("id"),
+                        "server_filters": base_server_filters + [_filter_dict(P_HISTORIE, historie_op, hv)],
+                        "local_contains": local_contains,
+                    }
                 )
         else:
             if historie_values:
                 base_server_filters.append(_filter_dict(P_HISTORIE, historie_op, historie_values[0]))
-            compiled.append({"id": g.get("id"), "server_filters": base_server_filters, "local_contains": local_contains})
+            compiled.append(
+                {
+                    "id": g.get("id"),
+                    "server_filters": base_server_filters,
+                    "local_contains": local_contains,
+                }
+            )
 
     return [c for c in compiled if (c.get("server_filters") or c.get("local_contains"))]
 

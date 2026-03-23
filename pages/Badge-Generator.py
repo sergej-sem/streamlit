@@ -2,18 +2,14 @@
 
 import re
 from pathlib import Path
-from typing import Dict, Any, List
+from typing import Dict, List
 
 import pandas as pd
 import streamlit as st
 
 from badgegen.hubspot_search import (
-    search_contacts_auto_split,
-    P_FIRSTNAME,
-    P_LASTNAME,
-    P_COMPANY,
-    P_JOBTITLE,
     P_HISTORIE,
+    search_compiled_groups,
 )
 from badgegen.historie_options import fetch_historie_options
 from badgegen.category import derive_kategorie_from_historie, ALLOWED_CATEGORIES
@@ -46,10 +42,6 @@ DEFAULT_TEMPLATES = {
 @st.cache_data(ttl=3600)
 def _cached_historie_options() -> List[tuple[str, str]]:
     return fetch_historie_options(token, historie_property=P_HISTORIE)
-
-
-def _match_substring(haystack: str, needle: str) -> bool:
-    return needle.casefold() in haystack.casefold()
 
 
 def _historie_value_to_label(raw: str, value_to_label: Dict[str, str]) -> str:
@@ -135,69 +127,9 @@ search_clicked = st.button(
 )
 
 
-def _search_group(server_filters: List[dict], local_contains: List[dict]) -> List[Dict[str, Any]]:
-    props = [P_FIRSTNAME, P_LASTNAME, P_COMPANY, P_JOBTITLE, P_HISTORIE]
-    fg = [{"filters": server_filters}] if server_filters else []
-
-    contacts = search_contacts_auto_split(
-        token,
-        filter_groups=fg,
-        properties=props,
-    )
-
-    if not local_contains:
-        return contacts
-
-    out: List[Dict[str, Any]] = []
-    for c in contacts:
-        pr = c.get("properties", {}) or {}
-        ok = True
-        for cond in local_contains:
-            prop = cond.get("propertyName")
-            needle = (cond.get("value") or "").strip()
-            if not prop or not needle:
-                continue
-            hay = (pr.get(prop) or "").strip()
-            if not _match_substring(hay, needle):
-                ok = False
-                break
-        if ok:
-            out.append(c)
-    return out
-
-
 @st.cache_data(ttl=120)
-def run_search_cached(compiled_groups: List[dict]) -> pd.DataFrame:
-    by_id: Dict[str, Dict[str, Any]] = {}
-
-    for g in compiled_groups:
-        server_filters = g.get("server_filters") or []
-        local_contains = g.get("local_contains") or []
-
-        # Schutz: nur lokale "enthält" ohne server_filter würde alle Kontakte laden
-        if not server_filters and local_contains:
-            continue
-
-        for c in _search_group(server_filters, local_contains):
-            cid = c.get("id")
-            if cid:
-                by_id[cid] = c
-
-    rows: List[Dict[str, Any]] = []
-    for c in by_id.values():
-        pr = c.get("properties", {}) or {}
-        rows.append(
-            {
-                "id": c.get("id"),
-                "firstname": (pr.get(P_FIRSTNAME) or "").strip(),
-                "lastname": (pr.get(P_LASTNAME) or "").strip(),
-                "company": pr.get(P_COMPANY) or "",
-                "jobtitle": pr.get(P_JOBTITLE) or "",
-                "historie": pr.get(P_HISTORIE) or "",
-            }
-        )
-
-    return pd.DataFrame(rows)
+def run_search_cached(compiled_groups: List[dict], token: str) -> pd.DataFrame:
+    return search_compiled_groups(token, compiled_groups)
 
 
 st.subheader("1) Kontakte suchen")
@@ -211,7 +143,7 @@ if search_clicked:
         st.stop()
 
     try:
-        df_new = run_search_cached(compiled_groups)
+        df_new = run_search_cached(compiled_groups, token)
     except Exception as e:
         st.error(f"❌ Suche fehlgeschlagen: {e}")
         st.stop()

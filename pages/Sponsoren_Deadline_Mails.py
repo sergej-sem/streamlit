@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import hashlib
-from datetime import date
+from datetime import date, datetime, timezone
+from uuid import uuid4
 
 import pandas as pd
 import streamlit as st
@@ -16,32 +17,28 @@ from sponsor_deadline_mails import (
     DEFAULT_SHEET_NAME,
     ImapDraftConfig,
     build_imap_draft_log_dataframe,
-    build_summary_dataframe,
     create_imap_drafts,
     generate_deadline_mails,
     list_workbook_sheets,
+)
+from sponsor_deadline_mails.summary_state import (
+    SUMMARY_SCHEMA_VERSION,
+    build_summary_editor_df,
+    ensure_summary_state,
+    flush_full_rerun_after_summary_commit,
+    get_summary_frozen_base,
+    make_summary_callback,
+    selected_mail_numbers as get_selected_mail_numbers,
 )
 from streamlit_ui import render_page_title
 
 
 st.set_page_config(page_title="Deadline-E-Mails für Sponsoren", layout="wide")
 
-SUMMARY_COLUMNS = [
-    "Ausgewählt",
-    "Sponsor",
-    "Sprache",
-    "Paket",
-    "E-Mail",
-    "Kopie",
-    "Erhalten",
-    "Offen",
-    "Ausstehend",
-    "Empfohlen",
-]
-SUMMARY_SCHEMA_VERSION = 4
 SENDER_EMAIL_SUGGESTIONS = [
     "severin.wagner@mysecurityevent.de",
 ]
+CONFIRM_WORD_DRAFTS = "DRAFTS"
 
 
 def _init_state() -> None:
@@ -54,6 +51,8 @@ def _init_state() -> None:
         "sdm_summary_schema_version": 0,
         "sdm_preview_mail_number": None,
         "sdm_imap_log_records": None,
+        "sdm_imap_run_context": None,
+        "sdm_imap_run_error": None,
     }
     for key, value in defaults.items():
         st.session_state.setdefault(key, value)
@@ -68,6 +67,8 @@ def _reset_generation_state(file_token: str | None = None) -> None:
     st.session_state["sdm_summary_schema_version"] = 0
     st.session_state["sdm_preview_mail_number"] = None
     st.session_state["sdm_imap_log_records"] = None
+    st.session_state["sdm_imap_run_context"] = None
+    st.session_state["sdm_imap_run_error"] = None
 
 
 @st.cache_data(show_spinner=False)
@@ -112,125 +113,25 @@ def _load_base_imap_config() -> ImapDraftConfig | None:
     )
 
 
-def _selected_mail_numbers(summary_df) -> set[int]:
-    if summary_df is None or summary_df.empty:
-        return set()
-    mask = summary_df["Ausgewählt"].fillna(False).astype(bool)
-    return {int(mail_number) for mail_number in summary_df.index[mask].tolist()}
-
-
 def _mail_label(mail_number: int, mail) -> str:
     return f"{mail_number} - {mail.sponsor_name} ({mail.to_email})"
 
 
-def _build_summary_editor_df(result):
-    summary_df = build_summary_dataframe(result).reset_index(drop=True)
-    summary_df.index = pd.RangeIndex(start=1, stop=len(summary_df) + 1, step=1)
-    summary_df.index.name = "MailNr"
-    summary_df.insert(0, "Ausgewählt", True)
-    summary_df = summary_df.rename(
-        columns={
-            "sponsor_name": "Sponsor",
-            "language": "Sprache",
-            "package": "Paket",
-            "to_email": "E-Mail",
-            "cc_email": "Kopie",
-            "green_count": "Erhalten",
-            "red_count": "Offen",
-            "yellow_count": "Ausstehend",
-            "white_count": "Empfohlen",
-        }
-    )
-    return summary_df[SUMMARY_COLUMNS].copy()
-
-
-def _summary_needs_rebuild(result) -> bool:
-    df = st.session_state.get("sdm_summary_df")
-    if not isinstance(df, pd.DataFrame):
-        return True
-    if st.session_state.get("sdm_summary_schema_version") != SUMMARY_SCHEMA_VERSION:
-        return True
-    if list(df.columns) != SUMMARY_COLUMNS:
-        return True
-    expected_index = list(range(1, len(result.mails) + 1))
-    if df.index.tolist() != expected_index:
-        return True
-    return len(df) != len(result.mails)
-
-
-def _ensure_summary_state(result) -> None:
-    if _summary_needs_rebuild(result):
-        st.session_state["sdm_summary_df"] = _build_summary_editor_df(result)
-        st.session_state["sdm_summary_schema_version"] = SUMMARY_SCHEMA_VERSION
-        st.session_state["sdm_summary_view_version"] += 1
-        if result.mails:
-            st.session_state["sdm_preview_mail_number"] = 1
-
-
-def _get_summary_frozen_base(key: str, initial: pd.DataFrame) -> pd.DataFrame:
-    if key not in st.session_state:
-        prefix = key.rsplit("_", 1)[0] + "_"
-        stale_keys = [candidate for candidate in st.session_state if candidate.startswith(prefix) and candidate != key]
-        for candidate in stale_keys:
-            del st.session_state[candidate]
-        st.session_state[key] = initial.copy()
-    return st.session_state[key]
-
-
-def _sync_summary_selection(editor_key: str, frozen_base: pd.DataFrame) -> None:
-    state = st.session_state.get(editor_key)
-    if not isinstance(state, dict):
-        return
-
-    edited_rows = state.get("edited_rows", {})
-    if not edited_rows:
-        return
-
-    summary_df = st.session_state["sdm_summary_df"]
-    changed = False
-
-    for pos_key, changes in edited_rows.items():
-        pos = int(pos_key)
-        if pos >= len(frozen_base):
-            continue
-        mail_number = frozen_base.index[pos]
-        if "Ausgewählt" not in changes:
-            continue
-        new_value = bool(changes["Ausgewählt"])
-        if bool(summary_df.at[mail_number, "Ausgewählt"]) != new_value:
-            summary_df.at[mail_number, "Ausgewählt"] = new_value
-            changed = True
-
-    if changed:
-        st.session_state["_sdm_rerun_after_commit"] = True
-
-
-def _make_summary_callback(editor_key: str, frozen_base: pd.DataFrame):
-    def _cb() -> None:
-        _sync_summary_selection(editor_key, frozen_base)
-    return _cb
-
-
-def _flush_full_rerun_after_summary_commit() -> None:
-    if st.session_state.pop("_sdm_rerun_after_commit", False):
-        st.rerun()
-
-
 @st.fragment
 def _frag_summary() -> None:
-    _flush_full_rerun_after_summary_commit()
+    flush_full_rerun_after_summary_commit(st.session_state, rerun=st.rerun)
     view_version = st.session_state["sdm_summary_view_version"]
     summary_df = st.session_state["sdm_summary_df"]
     base_key = f"sdm_summary_base_{view_version}"
     editor_key = f"sdm_summary_editor_{view_version}"
-    frozen_base = _get_summary_frozen_base(base_key, summary_df)
+    frozen_base = get_summary_frozen_base(st.session_state, base_key, summary_df)
     st.data_editor(
         frozen_base,
         key=editor_key,
         use_container_width=True,
         hide_index=True,
         num_rows="fixed",
-        on_change=_make_summary_callback(editor_key, frozen_base),
+        on_change=make_summary_callback(st.session_state, editor_key, frozen_base),
         column_config={
             "Ausgewählt": st.column_config.CheckboxColumn("Ausgewählt"),
             "Sponsor": st.column_config.TextColumn("Sponsor", width="medium"),
@@ -336,11 +237,13 @@ if generate_clicked:
         else:
             st.session_state["sdm_result"] = result
             st.session_state["sdm_generation_id"] += 1
-            st.session_state["sdm_summary_df"] = _build_summary_editor_df(result)
+            st.session_state["sdm_summary_df"] = build_summary_editor_df(result)
             st.session_state["sdm_summary_schema_version"] = SUMMARY_SCHEMA_VERSION
             st.session_state["sdm_summary_view_version"] += 1
             st.session_state["sdm_preview_mail_number"] = 1 if result.mails else None
             st.session_state["sdm_imap_log_records"] = None
+            st.session_state["sdm_imap_run_context"] = None
+            st.session_state["sdm_imap_run_error"] = None
 
 result = st.session_state["sdm_result"]
 if result is None:
@@ -351,13 +254,13 @@ if not result.mails:
     st.warning("In der Datei wurden keine Sponsoren mit E-Mail-Adresse gefunden.")
     st.stop()
 
-_ensure_summary_state(result)
+ensure_summary_state(st.session_state, result)
 summary_df = st.session_state["sdm_summary_df"]
 
 st.subheader("Zusammenfassung")
 _frag_summary()
 summary_df = st.session_state["sdm_summary_df"]
-selected_mail_numbers = _selected_mail_numbers(summary_df)
+selected_mail_numbers = get_selected_mail_numbers(summary_df)
 
 st.divider()
 preview_col, details_col = st.columns([1.1, 2], gap="large")
@@ -397,9 +300,11 @@ selected_mails = [
     for mail_number in sorted(selected_mail_numbers)
     if mail_number in mail_by_number
 ]
+selected_count = len(selected_mails)
 st.caption("Es werden nur die aktuell ausgewählten Sponsoren berücksichtigt.")
 imap_username = imap_username.strip()
 drafts_folder = base_imap_config.drafts_folder.strip()
+expected_draft_confirmation = f"{CONFIRM_WORD_DRAFTS} {selected_count}"
 
 if not imap_username:
     st.warning("Bitte gib Deine E-Mail-Adresse ein.")
@@ -411,7 +316,37 @@ elif not selected_mails:
     st.warning("Bitte mindestens einen Sponsor in der Tabelle auswählen.")
 else:
     st.info("Die Entwürfe werden in Deinem Postfach gespeichert.")
-    if st.button("Ausgewählte Entwürfe speichern", type="primary", use_container_width=True):
+    draft_confirm_text = st.text_input(
+        f"Bestätigung: Bitte exakt {expected_draft_confirmation} eintippen",
+        value="",
+        help=(
+            "Damit nicht versehentlich Entwürfe erzeugt werden. "
+            f"Erwartet wird exakt: {expected_draft_confirmation}"
+        ),
+    )
+    allow_draft_run = draft_confirm_text.strip() == expected_draft_confirmation
+    if not allow_draft_run:
+        st.warning(f"Zum Speichern bitte exakt {expected_draft_confirmation} eingeben.")
+
+    if st.button(
+        "Ausgewählte Entwürfe speichern",
+        type="primary",
+        use_container_width=True,
+        disabled=not allow_draft_run,
+    ):
+        run_started_utc = datetime.now(timezone.utc)
+        run_context = {
+            "Run-ID": f"SDM-{run_started_utc.strftime('%Y%m%dT%H%M%SZ')}-{uuid4().hex[:8]}",
+            "Modus": "DRAFTS",
+            "Zeitpunkt UTC": run_started_utc.replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+            "Ausgewählte Mails": selected_count,
+            "Sheet": sheet_name,
+            "Event": f"{event_city.strip() or DEFAULT_EVENT_CITY} | {event_start.isoformat()} bis {event_end.isoformat()}",
+            "Sender": imap_username,
+        }
+        st.session_state["sdm_imap_log_records"] = None
+        st.session_state["sdm_imap_run_context"] = run_context
+        st.session_state["sdm_imap_run_error"] = None
         try:
             records = create_imap_drafts(
                 selected_mails,
@@ -425,6 +360,7 @@ else:
                 ),
             )
         except Exception as exc:
+            st.session_state["sdm_imap_run_error"] = str(exc)
             st.error(f"Die Entwürfe konnten nicht gespeichert werden: {exc}")
         else:
             st.session_state["sdm_imap_log_records"] = records
@@ -436,11 +372,38 @@ else:
                 st.success(f"Entwürfe gespeichert: {success_count}")
 
 imap_log_records = st.session_state.get("sdm_imap_log_records")
-if imap_log_records:
+imap_run_context = st.session_state.get("sdm_imap_run_context")
+imap_run_error = st.session_state.get("sdm_imap_run_error")
+if imap_log_records or imap_run_error:
     st.divider()
     st.subheader("Ergebnis")
-    st.dataframe(
-        build_imap_draft_log_dataframe(imap_log_records),
-        use_container_width=True,
-        hide_index=True,
+
+    if imap_log_records:
+        total_count = len(imap_log_records)
+        success_count = sum(record.result == "draft_created" for record in imap_log_records)
+        error_count = total_count - success_count
+    else:
+        total_count = int((imap_run_context or {}).get("Ausgewählte Mails", 0))
+        success_count = 0
+        error_count = total_count
+
+    st.write(
+        f"Ergebnisübersicht: Gesamt: **{total_count}** · "
+        f"Erfolgreich: **{success_count}** · "
+        f"Fehler: **{error_count}**"
     )
+
+    if imap_log_records:
+        result_df = build_imap_draft_log_dataframe(imap_log_records)
+        for column, value in (imap_run_context or {}).items():
+            result_df[column] = value
+    else:
+        error_row = {
+            "Status": "Fehler",
+            "Hinweis": imap_run_error or "-",
+        }
+        for column, value in (imap_run_context or {}).items():
+            error_row[column] = value
+        result_df = pd.DataFrame([error_row])
+
+    st.dataframe(result_df, use_container_width=True, hide_index=True)

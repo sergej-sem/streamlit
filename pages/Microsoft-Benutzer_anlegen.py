@@ -1,4 +1,6 @@
+from datetime import datetime, timezone
 from typing import Dict, List
+from uuid import uuid4
 
 import pandas as pd
 import streamlit as st
@@ -146,14 +148,8 @@ with controls_col:
         )
 
     confirm_text = ""
-    if not dry_run:
-        st.warning("Achtung: Im nächsten Schritt werden echte Benutzerkonten angelegt.")
-        confirm_text = st.text_input(
-            f"Sicherheitsabfrage: Bitte {CONFIRM_WORD_LIVE} eintippen",
-            value="",
-            help="Damit nicht aus Versehen Benutzer angelegt werden.",
-        )
-    else:
+    live_confirmation_placeholder = CONFIRM_WORD_LIVE
+    if dry_run:
         st.info("Testlauf aktiv: Es werden keine Benutzer angelegt.")
 
 with main_col:
@@ -253,6 +249,21 @@ with main_col:
     err_count = int((plan["status"] == "FEHLER").sum())
     st.write(f"BEREIT: **{ready_count}** · ÜBERSPRUNGEN: **{skip_count}** · FEHLER: **{err_count}**")
 
+    expected_live_confirmation = f"{CONFIRM_WORD_LIVE} {ready_count}"
+    live_confirmation_placeholder = expected_live_confirmation
+
+    if not dry_run:
+        with controls_col:
+            st.warning("Achtung: Im nächsten Schritt werden echte Benutzerkonten angelegt.")
+            confirm_text = st.text_input(
+                f"Sicherheitsabfrage: Bitte exakt {expected_live_confirmation} eintippen",
+                value="",
+                help=(
+                    "Damit nicht aus Versehen Benutzer angelegt werden. "
+                    f"Erwartet wird exakt: {expected_live_confirmation}"
+                ),
+            )
+
     st.divider()
     st.subheader("Ausführen")
 
@@ -260,7 +271,8 @@ with main_col:
         enable_live_user_creation
         and (not dry_run)
         and bool(password.strip())
-        and (confirm_text.strip().upper() == CONFIRM_WORD_LIVE)
+        and ready_count > 0
+        and (confirm_text.strip().upper() == expected_live_confirmation.upper())
     )
 
     if not dry_run and not enable_live_user_creation:
@@ -268,7 +280,7 @@ with main_col:
     elif not dry_run and not password.strip():
         st.error("Zum Anlegen bitte ein Start-Passwort eingeben.")
     elif not dry_run and not allow_live:
-        st.error(f"Zum Anlegen bitte links {CONFIRM_WORD_LIVE} eintippen.")
+        st.error(f"Zum Anlegen bitte links exakt {live_confirmation_placeholder} eintippen.")
 
     can_start = ready_count > 0 and (dry_run or allow_live)
     start_label = "Testlauf starten" if dry_run else "Benutzer anlegen"
@@ -284,10 +296,22 @@ with main_col:
         if not dry_run and not password.strip():
             st.error("Zum Anlegen bitte ein Start-Passwort eingeben.")
             st.stop()
+        if not dry_run and not allow_live:
+            st.error(f"Zum Anlegen bitte links exakt {expected_live_confirmation} eintippen.")
+            st.stop()
 
         log_rows: List[Dict] = []
         progress = st.progress(0)
         status_box = st.empty()
+        run_started_utc = datetime.now(timezone.utc)
+        run_context = {
+            "Run-ID": f"MBU-{run_started_utc.strftime('%Y%m%dT%H%M%SZ')}-{uuid4().hex[:8]}",
+            "Modus": "TESTLAUF" if dry_run else "LIVE",
+            "Zeitpunkt UTC": run_started_utc.replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+            "Domain": domain.strip(),
+            "Lizenzen": ", ".join(selected_license_labels),
+            "BEREIT im Plan": ready_count,
+        }
 
         rows = plan.to_dict(orient="records")
         total = max(1, len(rows))
@@ -309,12 +333,26 @@ with main_col:
                 create_user=lambda payload: create_user_graph(payload, token),
                 assign_user_licenses=lambda user_id, sku_ids: assign_licenses(user_id, sku_ids, token),
             )
-            log_rows.append(result["log_row"])
+            log_rows.append({**result["log_row"], **run_context})
 
         progress.progress(100)
         status_box.write("Fertig.")
 
         log_df = pd.DataFrame(log_rows)
+        result_counts = (
+            log_df["Ergebnis"].fillna("").astype(str).value_counts()
+            if "Ergebnis" in log_df.columns
+            else pd.Series(dtype="int64")
+        )
+
+        st.write(
+            "Ergebnisübersicht: "
+            f"ANGELEGT: **{int(result_counts.get('ANGELEGT', 0))}** · "
+            f"TEILERFOLG: **{int(result_counts.get('TEILERFOLG', 0))}** · "
+            f"FEHLER: **{int(result_counts.get('FEHLER', 0))}** · "
+            f"TESTLAUF: **{int(result_counts.get('TESTLAUF', 0))}** · "
+            f"ÜBERSPRUNGEN: **{int(result_counts.get('ÜBERSPRUNGEN', 0))}**"
+        )
         st.subheader("Protokoll")
         st.dataframe(log_df, use_container_width=True, hide_index=True)
 

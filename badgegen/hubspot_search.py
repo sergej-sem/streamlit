@@ -1,5 +1,7 @@
 # badgegen/hubspot_search.py
 from typing import Dict, Any, List, Optional
+
+import pandas as pd
 import requests
 
 from shared.hubspot import (
@@ -14,6 +16,7 @@ P_LASTNAME = "lastname"
 P_COMPANY = "company"
 P_JOBTITLE = "jobtitle"
 P_HISTORIE = "historie"
+SEARCH_PROPERTIES = [P_FIRSTNAME, P_LASTNAME, P_COMPANY, P_JOBTITLE, P_HISTORIE]
 
 
 class HubSpotAPIError(RuntimeError):
@@ -79,3 +82,102 @@ def search_contacts_auto_split(
         )
     except requests.HTTPError as exc:
         raise _wrap_http_error(exc) from exc
+
+
+def _match_substring(haystack: str, needle: str) -> bool:
+    return needle.casefold() in haystack.casefold()
+
+
+def _apply_local_contains_filters(
+    contacts: List[Dict[str, Any]],
+    local_contains: List[dict],
+) -> List[Dict[str, Any]]:
+    if not local_contains:
+        return contacts
+
+    out: List[Dict[str, Any]] = []
+    for contact in contacts:
+        properties = contact.get("properties", {}) or {}
+        matches_all = True
+        for condition in local_contains:
+            property_name = condition.get("propertyName")
+            needle = (condition.get("value") or "").strip()
+            if not property_name or not needle:
+                continue
+
+            haystack = (properties.get(property_name) or "").strip()
+            if not _match_substring(haystack, needle):
+                matches_all = False
+                break
+
+        if matches_all:
+            out.append(contact)
+
+    return out
+
+
+def _rows_from_contacts(contacts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    for contact in contacts:
+        properties = contact.get("properties", {}) or {}
+        rows.append(
+            {
+                "id": contact.get("id"),
+                "firstname": (properties.get(P_FIRSTNAME) or "").strip(),
+                "lastname": (properties.get(P_LASTNAME) or "").strip(),
+                "company": properties.get(P_COMPANY) or "",
+                "jobtitle": properties.get(P_JOBTITLE) or "",
+                "historie": properties.get(P_HISTORIE) or "",
+            }
+        )
+    return rows
+
+
+def search_group(
+    token: str,
+    *,
+    server_filters: List[dict],
+    local_contains: List[dict],
+    properties: List[str] | None = None,
+) -> List[Dict[str, Any]]:
+    requested_properties = list(properties or SEARCH_PROPERTIES)
+    filter_groups = [{"filters": server_filters}] if server_filters else []
+
+    contacts = search_contacts_auto_split(
+        token,
+        filter_groups=filter_groups,
+        properties=requested_properties,
+    )
+    return _apply_local_contains_filters(contacts, local_contains)
+
+
+def search_compiled_groups(
+    token: str,
+    compiled_groups: List[dict],
+    *,
+    properties: List[str] | None = None,
+) -> pd.DataFrame:
+    by_id: Dict[str, Dict[str, Any]] = {}
+
+    for group in compiled_groups:
+        server_filters = group.get("server_filters") or []
+        local_contains = group.get("local_contains") or []
+
+        if not server_filters and local_contains:
+            continue
+
+        for contact in search_group(
+            token,
+            server_filters=server_filters,
+            local_contains=local_contains,
+            properties=properties,
+        ):
+            contact_id = contact.get("id")
+            if contact_id:
+                by_id[str(contact_id)] = contact
+
+    rows = _rows_from_contacts(list(by_id.values()))
+    return pd.DataFrame(
+        rows,
+        columns=["id", "firstname", "lastname", "company", "jobtitle", "historie"],
+    )
