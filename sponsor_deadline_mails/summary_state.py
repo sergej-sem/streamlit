@@ -21,6 +21,17 @@ SUMMARY_COLUMNS = [
     "Empfohlen",
 ]
 SUMMARY_SCHEMA_VERSION = 4
+SUMMARY_EDITOR_RENAME_MAP = {
+    "sponsor_name": "Sponsor",
+    "language": "Sprache",
+    "package": "Paket",
+    "to_email": "E-Mail",
+    "cc_email": "Kopie",
+    "green_count": "Erhalten",
+    "red_count": "Offen",
+    "yellow_count": "Ausstehend",
+    "white_count": "Empfohlen",
+}
 
 
 def selected_mail_numbers(summary_df) -> set[int]:
@@ -35,19 +46,7 @@ def build_summary_editor_df(result) -> pd.DataFrame:
     summary_df.index = pd.RangeIndex(start=1, stop=len(summary_df) + 1, step=1)
     summary_df.index.name = "MailNr"
     summary_df.insert(0, "Ausgewählt", True)
-    summary_df = summary_df.rename(
-        columns={
-            "sponsor_name": "Sponsor",
-            "language": "Sprache",
-            "package": "Paket",
-            "to_email": "E-Mail",
-            "cc_email": "Kopie",
-            "green_count": "Erhalten",
-            "red_count": "Offen",
-            "yellow_count": "Ausstehend",
-            "white_count": "Empfohlen",
-        }
-    )
+    summary_df = summary_df.rename(columns=SUMMARY_EDITOR_RENAME_MAP)
     return summary_df[SUMMARY_COLUMNS].copy()
 
 

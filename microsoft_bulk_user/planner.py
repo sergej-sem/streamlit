@@ -13,6 +13,27 @@ from microsoft_bulk_user.parser import (
 )
 
 
+def _build_plan_row(
+    *,
+    row_number: int,
+    display_name: str,
+    first_name: str,
+    last_name: str,
+    planned_upn: str,
+    status: str,
+    details: str,
+) -> dict:
+    return {
+        "row": row_number,
+        "displayName": display_name,
+        "firstName": first_name,
+        "lastName": last_name,
+        "plannedUPN": planned_upn,
+        "status": status,
+        "details": details,
+    }
+
+
 def build_plan(
     df: pd.DataFrame,
     domain: str,
@@ -60,30 +81,30 @@ def build_plan(
 
         if not first_raw or not last_raw:
             rows.append(
-                {
-                    "row": idx + 1,
-                    "displayName": display,
-                    "firstName": first_raw,
-                    "lastName": last_raw,
-                    "plannedUPN": "",
-                    "status": "FEHLER",
-                    "details": "Vorname/Nachname fehlt oder konnte nicht erkannt werden",
-                }
+                _build_plan_row(
+                    row_number=idx + 1,
+                    display_name=display,
+                    first_name=first_raw,
+                    last_name=last_raw,
+                    planned_upn="",
+                    status="FEHLER",
+                    details="Vorname/Nachname fehlt oder konnte nicht erkannt werden",
+                )
             )
             continue
 
         name_key = (first_raw.casefold(), last_raw.casefold())
         if name_key in seen_names:
             rows.append(
-                {
-                    "row": idx + 1,
-                    "displayName": display,
-                    "firstName": first_raw,
-                    "lastName": last_raw,
-                    "plannedUPN": "",
-                    "status": "ÜBERSPRUNGEN",
-                    "details": "Duplikat in der Datei (gleicher Vor- und Nachname) – wird nicht angelegt",
-                }
+                _build_plan_row(
+                    row_number=idx + 1,
+                    display_name=display,
+                    first_name=first_raw,
+                    last_name=last_raw,
+                    planned_upn="",
+                    status="ÜBERSPRUNGEN",
+                    details="Duplikat in der Datei (gleicher Vor- und Nachname) – wird nicht angelegt",
+                )
             )
             continue
         seen_names.add(name_key)
@@ -95,57 +116,57 @@ def build_plan(
             last_norm = normalize_name_part(last_raw)
             if not first_norm or not last_norm:
                 rows.append(
-                    {
-                        "row": idx + 1,
-                        "displayName": display,
-                        "firstName": first_raw,
-                        "lastName": last_raw,
-                        "plannedUPN": "",
-                        "status": "FEHLER",
-                        "details": "Name kann nicht zu einem gültigen Login-Namen umgewandelt werden",
-                    }
+                _build_plan_row(
+                    row_number=idx + 1,
+                    display_name=display,
+                    first_name=first_raw,
+                    last_name=last_raw,
+                    planned_upn="",
+                    status="FEHLER",
+                    details="Name kann nicht zu einem gültigen Login-Namen umgewandelt werden",
                 )
+            )
                 continue
             planned_upn = f"{first_norm}.{last_norm}@{domain}"
 
         if name_exists(first_raw, last_raw):
             rows.append(
-                {
-                    "row": idx + 1,
-                    "displayName": display,
-                    "firstName": first_raw,
-                    "lastName": last_raw,
-                    "plannedUPN": planned_upn,
-                    "status": "ÜBERSPRUNGEN",
-                    "details": "Benutzer existiert bereits in Entra (gleicher Vor- und Nachname) – wird nicht angelegt",
-                }
+                _build_plan_row(
+                    row_number=idx + 1,
+                    display_name=display,
+                    first_name=first_raw,
+                    last_name=last_raw,
+                    planned_upn=planned_upn,
+                    status="ÜBERSPRUNGEN",
+                    details="Benutzer existiert bereits in Entra (gleicher Vor- und Nachname) – wird nicht angelegt",
+                )
             )
             continue
 
         if upn_exists(planned_upn):
             rows.append(
-                {
-                    "row": idx + 1,
-                    "displayName": display,
-                    "firstName": first_raw,
-                    "lastName": last_raw,
-                    "plannedUPN": planned_upn,
-                    "status": "FEHLER",
-                    "details": "Login-Name (UPN) existiert bereits – kein automatisches Umbenennen erlaubt",
-                }
+                _build_plan_row(
+                    row_number=idx + 1,
+                    display_name=display,
+                    first_name=first_raw,
+                    last_name=last_raw,
+                    planned_upn=planned_upn,
+                    status="FEHLER",
+                    details="Login-Name (UPN) existiert bereits – kein automatisches Umbenennen erlaubt",
+                )
             )
             continue
 
         rows.append(
-            {
-                "row": idx + 1,
-                "displayName": display,
-                "firstName": first_raw,
-                "lastName": last_raw,
-                "plannedUPN": planned_upn,
-                "status": "BEREIT",
-                "details": "",
-            }
+            _build_plan_row(
+                row_number=idx + 1,
+                display_name=display,
+                first_name=first_raw,
+                last_name=last_raw,
+                planned_upn=planned_upn,
+                status="BEREIT",
+                details="",
+            )
         )
 
     return pd.DataFrame(rows)

@@ -9,6 +9,48 @@ def _base_log_row(row: Mapping[str, Any]) -> dict:
     }
 
 
+def _set_log_result(log_row: dict, result: str, hint: str) -> None:
+    log_row.update(
+        {
+            "Ergebnis": result,
+            "Hinweis": hint,
+        }
+    )
+
+
+def _build_execution_result(
+    *,
+    outcome: str,
+    user_created: bool,
+    license_assignment_failed: bool,
+    log_row: dict,
+) -> dict:
+    return {
+        "outcome": outcome,
+        "user_created": user_created,
+        "license_assignment_failed": license_assignment_failed,
+        "log_row": log_row,
+    }
+
+
+def _finalize_execution_result(
+    log_row: dict,
+    *,
+    result: str,
+    hint: str,
+    outcome: str,
+    user_created: bool,
+    license_assignment_failed: bool,
+) -> dict:
+    _set_log_result(log_row, result, hint)
+    return _build_execution_result(
+        outcome=outcome,
+        user_created=user_created,
+        license_assignment_failed=license_assignment_failed,
+        log_row=log_row,
+    )
+
+
 def execute_plan_row(
     row: Mapping[str, Any],
     *,
@@ -29,36 +71,28 @@ def execute_plan_row(
     log_row = _base_log_row(row)
 
     if status != "BEREIT":
-        log_row.update(
-            {
-                "Ergebnis": status,
-                "Hinweis": row.get("details", ""),
-            }
+        return _finalize_execution_result(
+            log_row,
+            result=status,
+            hint=row.get("details", ""),
+            outcome="planner_passthrough",
+            user_created=False,
+            license_assignment_failed=False,
         )
-        return {
-            "outcome": "planner_passthrough",
-            "user_created": False,
-            "license_assignment_failed": False,
-            "log_row": log_row,
-        }
 
     if dry_run:
         label_list = list(selected_license_labels)
         hint = "Nicht angelegt (Testlauf)"
         if label_list:
             hint += f" · Würde Lizenzen zuweisen: {', '.join(label_list)}"
-        log_row.update(
-            {
-                "Ergebnis": "TESTLAUF",
-                "Hinweis": hint,
-            }
+        return _finalize_execution_result(
+            log_row,
+            result="TESTLAUF",
+            hint=hint,
+            outcome="dry_run",
+            user_created=False,
+            license_assignment_failed=False,
         )
-        return {
-            "outcome": "dry_run",
-            "user_created": False,
-            "license_assignment_failed": False,
-            "log_row": log_row,
-        }
 
     try:
         if not enable_live_user_creation:
@@ -80,54 +114,38 @@ def execute_plan_row(
             try:
                 assign_user_licenses(str(user_id), selected_sku_ids)
             except Exception as exc:
-                log_row.update(
-                    {
-                        "Ergebnis": "TEILERFOLG",
-                        "Hinweis": f"Lizenzzuweisung fehlgeschlagen: {exc}",
-                    }
+                return _finalize_execution_result(
+                    log_row,
+                    result="TEILERFOLG",
+                    hint=f"Lizenzzuweisung fehlgeschlagen: {exc}",
+                    outcome="partial_success",
+                    user_created=True,
+                    license_assignment_failed=True,
                 )
-                return {
-                    "outcome": "partial_success",
-                    "user_created": True,
-                    "license_assignment_failed": True,
-                    "log_row": log_row,
-                }
 
-            log_row.update(
-                {
-                    "Ergebnis": "ANGELEGT",
-                    "Hinweis": "Lizenzen zugewiesen",
-                }
+            return _finalize_execution_result(
+                log_row,
+                result="ANGELEGT",
+                hint="Lizenzen zugewiesen",
+                outcome="success",
+                user_created=True,
+                license_assignment_failed=False,
             )
-            return {
-                "outcome": "success",
-                "user_created": True,
-                "license_assignment_failed": False,
-                "log_row": log_row,
-            }
 
-        log_row.update(
-            {
-                "Ergebnis": "ANGELEGT",
-                "Hinweis": "",
-            }
+        return _finalize_execution_result(
+            log_row,
+            result="ANGELEGT",
+            hint="",
+            outcome="success",
+            user_created=True,
+            license_assignment_failed=False,
         )
-        return {
-            "outcome": "success",
-            "user_created": True,
-            "license_assignment_failed": False,
-            "log_row": log_row,
-        }
     except Exception as exc:
-        log_row.update(
-            {
-                "Ergebnis": "FEHLER",
-                "Hinweis": str(exc),
-            }
+        return _finalize_execution_result(
+            log_row,
+            result="FEHLER",
+            hint=str(exc),
+            outcome="error",
+            user_created=False,
+            license_assignment_failed=False,
         )
-        return {
-            "outcome": "error",
-            "user_created": False,
-            "license_assignment_failed": False,
-            "log_row": log_row,
-        }

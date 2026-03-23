@@ -11,18 +11,12 @@ from .parser import (
     build_sponsor_row,
     cell_value,
     list_workbook_sheets,
-    normalize_lang,
-    normalize_package,
     normalize_text,
     slugify,
 )
 from .planner import (
     DeadlineItem,
     build_deadlines,
-    is_premium_package,
-    is_talk_package,
-    is_truthy_marker,
-    status_from_column,
 )
 from .rendering import build_html_body, build_subject, build_summary_dataframe
 

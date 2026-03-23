@@ -45,6 +45,15 @@ LICENSE_CATALOG = {
 }
 
 DEFAULT_LICENSE_SELECTION = ["O365_BUSINESS_PREMIUM"]
+PLAN_DISPLAY_RENAME_MAP = {
+    "row": "Zeile",
+    "displayName": "Name",
+    "firstName": "Vorname",
+    "lastName": "Nachname",
+    "plannedUPN": "Geplanter Login (UPN)",
+    "status": "Status",
+    "details": "Hinweis",
+}
 
 
 # ============================================================
@@ -68,6 +77,10 @@ def upn_exists_cached(upn: str, token: str) -> bool:
 @st.cache_data(ttl=300)
 def name_exists_cached(first: str, last: str, token: str) -> bool:
     return name_exists(first, last, token)
+
+
+def _rename_plan_columns(plan_df: pd.DataFrame) -> pd.DataFrame:
+    return plan_df.rename(columns=PLAN_DISPLAY_RENAME_MAP)
 
 
 # ============================================================
@@ -212,30 +225,10 @@ with main_col:
     else:
         plan_view = plan
 
-    plan_display = plan_view.rename(
-        columns={
-            "row": "Zeile",
-            "displayName": "Name",
-            "firstName": "Vorname",
-            "lastName": "Nachname",
-            "plannedUPN": "Geplanter Login (UPN)",
-            "status": "Status",
-            "details": "Hinweis",
-        }
-    )
+    plan_display = _rename_plan_columns(plan_view)
     st.dataframe(plan_display, use_container_width=True, hide_index=True)
 
-    plan_export = plan.rename(
-        columns={
-            "row": "Zeile",
-            "displayName": "Name",
-            "firstName": "Vorname",
-            "lastName": "Nachname",
-            "plannedUPN": "Geplanter Login (UPN)",
-            "status": "Status",
-            "details": "Hinweis",
-        }
-    )
+    plan_export = _rename_plan_columns(plan)
     plan_csv = plan_export.to_csv(index=False).encode("utf-8")
     st.download_button(
         "Plan als CSV herunterladen",

@@ -27,6 +27,28 @@ def _normalize_historie_values(historie_values: Iterable[str]) -> list[str]:
     return normalized
 
 
+def _build_historie_filter_groups(historie_values: list[str]) -> list[dict]:
+    return [
+        {
+            "filters": [
+                {
+                    "propertyName": HISTORIE_PROPERTY,
+                    "operator": "CONTAINS_TOKEN",
+                    "value": historie_value,
+                }
+            ]
+        }
+        for historie_value in historie_values
+    ]
+
+
+def _update_results_by_id(results_by_id: dict[str, dict], results: list[dict]) -> None:
+    for item in results:
+        contact_id = item.get("id")
+        if contact_id:
+            results_by_id[contact_id] = item
+
+
 def load_historie_options(*, token: str) -> list[tuple[str, str]]:
     return fetch_property_options(
         HISTORIE_PROPERTY,
@@ -48,28 +70,12 @@ def fetch_contacts_by_historien(
     results_by_id: dict[str, dict] = {}
 
     for batch in _chunks(normalized_values, initial_filtergroups_per_request):
-        filter_groups = [
-            {
-                "filters": [
-                    {
-                        "propertyName": HISTORIE_PROPERTY,
-                        "operator": "CONTAINS_TOKEN",
-                        "value": historie_value,
-                    }
-                ]
-            }
-            for historie_value in batch
-        ]
-
+        filter_groups = _build_historie_filter_groups(batch)
         results = search_contacts_with_auto_split(
             filter_groups,
             HS_PROPERTIES,
             token=token,
         )
-
-        for item in results:
-            contact_id = item.get("id")
-            if contact_id:
-                results_by_id[contact_id] = item
+        _update_results_by_id(results_by_id, results)
 
     return list(results_by_id.values())

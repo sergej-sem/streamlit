@@ -210,25 +210,26 @@ def build_html_body(
 """.strip()
 
 
+def _summary_row_from_mail(mail) -> dict:
+    return {
+        "row_number": mail.row_number,
+        "sponsor_name": mail.sponsor_name,
+        "language": mail.language,
+        "package": mail.package,
+        "to_email": mail.to_email,
+        "cc_email": mail.cc_email,
+        "subject": mail.subject,
+        "html_file_name": mail.html_file_name,
+        "green_count": mail.green_count,
+        "red_count": mail.red_count,
+        "yellow_count": mail.yellow_count,
+        "white_count": mail.white_count,
+        "outlook_result": mail.outlook_result,
+    }
+
+
 def build_summary_rows(result) -> list[dict]:
-    return [
-        {
-            "row_number": mail.row_number,
-            "sponsor_name": mail.sponsor_name,
-            "language": mail.language,
-            "package": mail.package,
-            "to_email": mail.to_email,
-            "cc_email": mail.cc_email,
-            "subject": mail.subject,
-            "html_file_name": mail.html_file_name,
-            "green_count": mail.green_count,
-            "red_count": mail.red_count,
-            "yellow_count": mail.yellow_count,
-            "white_count": mail.white_count,
-            "outlook_result": mail.outlook_result,
-        }
-        for mail in result.mails
-    ]
+    return [_summary_row_from_mail(mail) for mail in result.mails]
 
 
 def build_summary_dataframe(result) -> pd.DataFrame:

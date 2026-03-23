@@ -1,7 +1,7 @@
 import io
 import re
 import unicodedata
-from typing import Optional, Tuple
+from typing import Callable, Optional, Tuple
 
 import pandas as pd
 
@@ -142,25 +142,60 @@ def normalize_name_part(s: str) -> str:
     return s
 
 
+def _fallback_columns(column_count: int) -> list[str]:
+    return ["FirstName", "LastName"] + [f"Col{idx}" for idx in range(3, column_count + 1)]
+
+
+def _apply_headerless_fallback(
+    df: pd.DataFrame,
+    fallback_loader: Callable[[], pd.DataFrame],
+) -> pd.DataFrame:
+    if has_any_alias_columns(df.columns) or not looks_like_headerless(df.columns):
+        return df
+
+    fallback_df = fallback_loader()
+    if fallback_df.shape[1] < 2:
+        return df
+
+    fallback_df.columns = _fallback_columns(fallback_df.shape[1])
+    return fallback_df
+
+
+def _read_excel_bytes(raw: bytes, worksheet_number: int, *, header: int | None = 0) -> pd.DataFrame:
+    bio = io.BytesIO(raw)
+    return pd.read_excel(
+        bio,
+        sheet_name=max(0, worksheet_number - 1),
+        header=header,
+        dtype=str,
+        engine="openpyxl",
+    ).fillna("")
+
+
+def _read_csv_bytes_or_text(
+    raw: bytes,
+    text: str,
+    delim: str,
+    enc: str,
+    *,
+    header: int | None = 0,
+) -> pd.DataFrame:
+    try:
+        return pd.read_csv(io.BytesIO(raw), sep=delim, dtype=str, encoding=enc, header=header).fillna("")
+    except Exception:
+        return pd.read_csv(io.StringIO(text), sep=delim, dtype=str, header=header).fillna("")
+
+
 def read_table(uploaded_file, worksheet_number: int = 1) -> Tuple[pd.DataFrame, str]:
     name = uploaded_file.name.lower()
     raw = uploaded_file.getvalue()
 
     if name.endswith(".xlsx"):
-        bio = io.BytesIO(raw)
-        df = pd.read_excel(bio, sheet_name=max(0, worksheet_number - 1), dtype=str, engine="openpyxl").fillna("")
-        if not has_any_alias_columns(df.columns) and looks_like_headerless(df.columns):
-            bio2 = io.BytesIO(raw)
-            df2 = pd.read_excel(
-                bio2,
-                sheet_name=max(0, worksheet_number - 1),
-                header=None,
-                dtype=str,
-                engine="openpyxl",
-            ).fillna("")
-            if df2.shape[1] >= 2:
-                df2.columns = ["FirstName", "LastName"] + [f"Col{idx}" for idx in range(3, df2.shape[1] + 1)]
-                df = df2
+        df = _read_excel_bytes(raw, worksheet_number)
+        df = _apply_headerless_fallback(
+            df,
+            lambda: _read_excel_bytes(raw, worksheet_number, header=None),
+        )
         return df, "xlsx"
 
     text, enc = decode_bytes_auto(raw)
@@ -169,18 +204,10 @@ def read_table(uploaded_file, worksheet_number: int = 1) -> Tuple[pd.DataFrame, 
         return pd.DataFrame(), f"csv({enc})"
 
     delim = detect_delimiter(lines[0])
-    try:
-        df = pd.read_csv(io.BytesIO(raw), sep=delim, dtype=str, encoding=enc).fillna("")
-    except Exception:
-        df = pd.read_csv(io.StringIO(text), sep=delim, dtype=str).fillna("")
-
-    if not has_any_alias_columns(df.columns) and looks_like_headerless(df.columns):
-        try:
-            df2 = pd.read_csv(io.BytesIO(raw), sep=delim, header=None, dtype=str, encoding=enc).fillna("")
-        except Exception:
-            df2 = pd.read_csv(io.StringIO(text), sep=delim, header=None, dtype=str).fillna("")
-        if df2.shape[1] >= 2:
-            df2.columns = ["FirstName", "LastName"] + [f"Col{idx}" for idx in range(3, df2.shape[1] + 1)]
-            df = df2
+    df = _read_csv_bytes_or_text(raw, text, delim, enc)
+    df = _apply_headerless_fallback(
+        df,
+        lambda: _read_csv_bytes_or_text(raw, text, delim, enc, header=None),
+    )
 
     return df, f"csv({enc}, Trennzeichen='{delim}')"
