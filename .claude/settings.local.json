@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find /c/Users/admin/Sergej/streamlit -not -path */.venv/* -not -path */__pycache__/* -not -path */.git/* -not -path */.pytest_cache/* -type d)",
+      "Bash(xargs wc:*)",
+      "Bash(grep -E \"^/c/Users/admin/Sergej/streamlit/[^/]+$\")",
+      "Bash(find /c/Users/admin/Sergej/streamlit -maxdepth 1 -type f -name *.toml -o -name *.cfg -o -name *.ini)",
+      "Bash(grep -r \"from typing import\\\\|import typing\" /c/Users/admin/Sergej/streamlit/*.py /c/Users/admin/Sergej/streamlit/**/*.py)",
+      "Bash(git -C /c/Users/admin/Sergej/streamlit ls-files)",
+      "Bash(python3 -c \"import sys; print\\(sys.version\\)\")",
+      "Bash(python -c \"import sys; print\\(sys.version\\)\")",
+      "Bash(find . -path ./.venv -prune -o -type f \\\\\\(-name *.py -o -name *.txt -o -name *.toml -o -name *.md -o -name .env* -o -name *.json \\\\\\) -print)",
+      "Bash(find c:/Users/admin/Sergej/streamlit -name *.py -path */badgegen/* -o -path */excel_druckbereit_generator/* -o -path */microsoft_bulk_user/* -o -path */packliste/* -o -path */sponsor_deadline_mails/* -o -path */teilnehmerliste_generator/*)",
+      "Bash(wc -l c:/Users/admin/Sergej/streamlit/badgegen/*.py c:/Users/admin/Sergej/streamlit/excel_druckbereit_generator/*.py c:/Users/admin/Sergej/streamlit/microsoft_bulk_user/*.py c:/Users/admin/Sergej/streamlit/packliste/*.py c:/Users/admin/Sergej/streamlit/sponsor_deadline_mails/*.py c:/Users/admin/Sergej/streamlit/teilnehmerliste_generator/*.py)",
+      "Bash(wc -l c:/Users/admin/Sergej/streamlit/tests/*.py)",
+      "Bash(xargs grep:*)",
+      "Bash(ls -la c:/Users/admin/Sergej/streamlit/*.py)"
+    ]
+  }
+}

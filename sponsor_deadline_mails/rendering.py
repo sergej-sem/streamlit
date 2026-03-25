@@ -166,6 +166,7 @@ def build_html_body(
     event_city: str,
     event_start: date,
     event_end: date,
+    signature_html: str = "",
 ) -> str:
     salutation, intro, explainer = build_intro(sponsor, event_city, event_start, event_end)
     overview_head = "Deadline Overview" if sponsor.language == "EN" else "Deadlines auf einen Blick"
@@ -175,6 +176,7 @@ def build_html_body(
         else "Melde Dich gerne bei mir, solltest Du zu den Deadlines Fragen oder Anmerkungen haben."
     )
     footer = "Best regards," if sponsor.language == "EN" else "Beste Grüße,"
+    signature_block = f'\n  <div style="margin-top:16px;">{signature_html}</div>' if signature_html else ""
 
     return f"""
 <!DOCTYPE html>
@@ -204,7 +206,7 @@ def build_html_body(
     </tbody>
   </table>
   <p style="{HTML_BASE_STYLE} margin:12px 0 12px 0;">{html.escape(closing_note)}</p>
-  <p style="{HTML_BASE_STYLE} margin:0;">{html.escape(footer)}</p>
+  <p style="{HTML_BASE_STYLE} margin:0;">{html.escape(footer)}</p>{signature_block}
 </body>
 </html>
 """.strip()

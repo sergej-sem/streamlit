@@ -76,6 +76,7 @@ def generate_deadline_mails(
     event_city: str = DEFAULT_EVENT_CITY,
     event_start: date | str = DEFAULT_EVENT_START,
     event_end: date | str = DEFAULT_EVENT_END,
+    signature_html: str = "",
 ) -> GenerationResult:
     start_date = parse_event_date(event_start)
     end_date = parse_event_date(event_end)
@@ -103,7 +104,7 @@ def generate_deadline_mails(
 
             items = build_deadlines(ws, sponsor)
             subject = build_subject(sponsor.language, sponsor.sponsor_name)
-            html_body = build_html_body(sponsor, items, event_city, start_date, end_date)
+            html_body = build_html_body(sponsor, items, event_city, start_date, end_date, signature_html)
             html_file_name = f"{row_number:03d}_{slugify(sponsor.sponsor_name)}.html"
             green_count = sum(1 for item in items if item.status == "green")
             red_count = sum(1 for item in items if item.status == "red")

@@ -10,6 +10,24 @@ import streamlit.components.v1 as components
 from streamlit_searchbox import st_searchbox
 
 from shared.config import ConfigError, load_imap_draft_settings
+
+_SIGNATURES: dict[str, str] = {
+    "severin.wagner@mysecurityevent.de": (
+        '<p style="font-family:Calibri,Arial,sans-serif;font-size:11pt;margin:0;">'
+        '<b><span style="color:#212121;">Severin Wagner | Operations Manager</span></b></p>'
+        '<p style="font-family:Calibri,Arial,sans-serif;font-size:11pt;margin:0;">&nbsp;</p>'
+        '<p style="font-family:Calibri,Arial,sans-serif;font-size:11pt;margin:0;">'
+        '<a href="tel:+491793922128" style="color:#0078D4;">+49 179 3922 128</a></p>'
+        '<p style="font-family:Calibri,Arial,sans-serif;font-size:11pt;margin:0;color:#212121;">'
+        '<br>mysecurityevent GmbH</p>'
+        '<p style="font-family:Calibri,Arial,sans-serif;font-size:11pt;margin:0;color:#212121;">'
+        'Office: Novalisstra\u00dfe 11</p>'
+        '<p style="font-family:Calibri,Arial,sans-serif;font-size:11pt;margin:0;">'
+        '10115 Berlin\u00a0|\u00a0<a href="tel:+493052284088" style="color:#0078D4;">+49 30 52284088</a></p>'
+        '<p style="font-family:Calibri,Arial,sans-serif;font-size:11pt;margin:0;color:#212121;">'
+        'Amtsgericht Charlottenburg | HRB244080B</p>'
+    ),
+}
 from sponsor_deadline_mails import (
     DEFAULT_EVENT_CITY,
     DEFAULT_EVENT_END,
@@ -231,6 +249,7 @@ if generate_clicked:
                 event_city=event_city.strip() or DEFAULT_EVENT_CITY,
                 event_start=event_start,
                 event_end=event_end,
+                signature_html=_SIGNATURES.get(imap_username.strip().lower(), ""),
             )
         except Exception as exc:
             st.error(f"Generierung fehlgeschlagen: {exc}")
