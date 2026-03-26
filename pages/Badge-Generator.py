@@ -68,29 +68,17 @@ def _build_pdf_cached(
     )
 
 
+# Feste Ausgabe-Einstellungen – nicht mehr über die UI steuerbar
+enable_autofill = True
+uppercase_names = True
+uppercase_company = True
+tpl_map = dict(DEFAULT_TEMPLATES)
+
 col_filters, col_settings = st.columns([0.68, 0.32], gap="large")
 
 with col_settings:
-    st.markdown("### Einstellungen")
-    enable_autofill = st.checkbox("Autofill-Vorschläge", value=True)
-
-    st.divider()
     st.markdown("### Event / Kategorie")
     event_tag = st.text_input("Event-Tag (für Kategorie-Ermittlung)", value="26DOR")
-
-    st.divider()
-    st.markdown("### Ausgabe")
-    uppercase_names = st.checkbox("Vor-/Nachname in GROSSBUCHSTABEN", value=True)
-    uppercase_company = st.checkbox("Firma in GROSSBUCHSTABEN", value=True)
-
-    with st.expander("Templates (optional)", expanded=False):
-        tpl_map = {
-            "TN": st.text_input("Template: TN", value=DEFAULT_TEMPLATES["TN"]),
-            "VIP/REF": st.text_input("Template: VIP/REF", value=DEFAULT_TEMPLATES["VIP/REF"]),
-            "Sponsor": st.text_input("Template: Sponsor", value=DEFAULT_TEMPLATES["Sponsor"]),
-            "BEO": st.text_input("Template: BEO", value=DEFAULT_TEMPLATES["BEO"]),
-            "Team": st.text_input("Template: Team", value=DEFAULT_TEMPLATES["Team"]),
-        }
 
 with col_filters:
     historie_opts = _cached_historie_options()
