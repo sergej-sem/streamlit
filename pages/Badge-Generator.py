@@ -77,7 +77,7 @@ uppercase_company = True
 tpl_map = dict(DEFAULT_TEMPLATES)
 
 # Historie-Präfix: Dropdown oben, direkt vor den Filtern
-st.markdown("### Historie-Präfix")
+st.markdown("**Historie-Präfix**")
 event_tag = st.selectbox(
     "Historie-Präfix",
     options=["26DOR", "26BER", "26MUC"],
@@ -127,7 +127,6 @@ def run_search_cached(compiled_groups: List[dict], token: str) -> pd.DataFrame:
     return search_compiled_groups(token, compiled_groups)
 
 
-st.subheader("1) Kontakte suchen")
 
 if search_clicked:
     if needs_more_filters:
@@ -175,7 +174,6 @@ if df.empty:
     st.info("Noch keine Suche ausgeführt.")
     st.stop()
 
-st.subheader("2) Vorschau & Prüfung")
 
 total_hits = len(df)
 st.info(f"Treffer insgesamt: {total_hits}. Hinweis: Es werden nur die ersten 50 Kontakte angezeigt.")
@@ -213,7 +211,6 @@ if missing_files:
 if issues:
     st.stop()
 
-st.subheader("3) PDF erzeugen")
 
 cats_present = sorted([c for c in df["kategorie"].dropna().unique().tolist() if str(c).strip()])
 selected = st.multiselect("Kategorien auswählen", options=cats_present, default=cats_present)
