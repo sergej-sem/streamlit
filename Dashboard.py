@@ -40,6 +40,14 @@ st.markdown(
       .stCaption { margin-top: -0.25rem; }
       .section-title { font-size: 1.35rem; font-weight: 700; margin: 1.1rem 0 0.6rem 0; }
       .soft-divider { height: 1px; opacity: 0.12; margin: 1.25rem 0; background: currentColor; }
+      .sidebar-hint {
+        display: flex; align-items: center; gap: 0.65rem;
+        padding: 0.55rem 1.1rem; border-radius: 10px;
+        background: rgba(0,0,0,0.04); border-left: 4px solid rgba(0,0,0,0.18);
+        font-size: 1rem; font-weight: 500;
+        margin: 0.1rem 0 1rem 0; width: fit-content;
+      }
+      .sidebar-hint-arrow { font-size: 1.7rem; line-height: 1; }
       .st-key-dashboard-cards-grid [data-testid="stHorizontalBlock"] {
         gap: 0.75rem;
       }
@@ -181,6 +189,14 @@ def _label_for_dropdown(p: dict, title_counts: dict[str, int]) -> str:
 
 # ---------- UI ----------
 render_page_title("Dashboard")
+
+st.markdown(
+    "<div class='sidebar-hint'>"
+    "<span class='sidebar-hint-arrow'>⬅</span>"
+    "<span>Weitere Seiten findest du in der <strong>Sidebar</strong> links</span>"
+    "</div>",
+    unsafe_allow_html=True,
+)
 
 pages_all = _collect_pages_cached(str(ROOT), str(PAGES_DIR))
 if not pages_all:
