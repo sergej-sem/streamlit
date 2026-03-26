@@ -7,6 +7,7 @@ from typing import Dict, Any, List, Tuple
 from reportlab.lib.units import mm
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas
 from reportlab.graphics.barcode import qr
 from reportlab.graphics.shapes import Drawing
@@ -16,34 +17,95 @@ from reportlab.graphics import renderPDF
 A6_W, A6_H = 105 * mm, 148 * mm
 
 # A6 = 105 x 148 mm.  Header/Logo belegt ca. y > 118 mm.
-# Alle vier Textfelder eng gruppiert unterhalb des Headers.
-# Reihenfolge von oben nach unten: Vorname → Nachname → Firma → Jobtitel
+# Reihenfolge von oben nach unten: Vorname → Nachname → Jobtitel → (Abstand) → Firma
 # (x0, x1, y_bottom, y_top) in mm – ReportLab: y=0 ist unten
 TEXT_BOXES_MM = {
-    "firstname": (10.0, 95.0, 100.0, 112.0),
-    "lastname":  (10.0, 95.0,  89.0,  99.0),
-    "company":   (10.0, 95.0,  79.0,  88.0),
-    "jobtitle":  (10.0, 95.0,  71.0,  78.0),
-    "record_id": (10.0, 95.0,   2.0,   6.0),
+    "firstname": (10.0, 95.0, 100.0, 112.0),  # oben dominant
+    "lastname":  (10.0, 95.0,  89.0,  99.0),  # direkt darunter
+    "jobtitle":  (10.0, 95.0,  79.0,  88.0),  # direkt unter Nachname (1 mm Abstand)
+    "company":   (10.0, 95.0,  52.0,  67.0),  # deutlich tiefer, klar getrennt vom Jobtitel
 }
 
 # QR-Code: 30 mm Quadrat, horizontal zentriert, unterer Bereich
 QR_BOX_MM = (37.5, 67.5, 10.0, 40.0)
 
-# Fonts – Beispielbadge nutzt eine serifenlose Schrift (ähnlich Arial)
-FONT_NAME_FIRST = "Helvetica-Bold"
-FONT_NAME_LAST = "Helvetica-Bold"
-FONT_NAME_COMPANY = "Helvetica-Bold"
-FONT_NAME_JOB = "Helvetica"
-FONT_NAME_ID = "Helvetica"
+# ---------------------------------------------------------------------------
+# Font-Registrierung mit Fallback-Kette
+#
+# Priorität:
+#   1. assets/fonts/ im Projekt-Repo (z. B. selbst abgelegte TTF-Dateien)
+#   2. Windows-Systemfonts (Arial Bold / Arial Regular)
+#   3. ReportLab-eigene gebündelte Fonts (Vera Bold / Vera Regular)
+#   4. Built-in-Fallback: Helvetica-Bold / Helvetica (immer verfügbar)
+#
+# Hinweis: Stufe 2 funktioniert nur auf Windows. Stufen 3 und 4 sind
+# plattformunabhängig und stellen sicher, dass der Renderer nie abstürzt.
+# ---------------------------------------------------------------------------
 
-FONT_SIZE_FIRST_MAX = 52
-FONT_SIZE_LAST_MAX = 48
+def _find_first_existing(*paths: str) -> str | None:
+    for p in paths:
+        if p and os.path.isfile(p):
+            return p
+    return None
+
+
+def _register_badge_fonts() -> tuple[str, str]:
+    """
+    Registriert die beste verfügbare Bold/Regular Sans-Serif-Kombination.
+    Gibt (heavy_font_name, regular_font_name) zurück.
+    """
+    # Repo-Root: render_pdf.py liegt in badgegen/, Root ist eine Ebene höher
+    _repo_root = os.path.normpath(os.path.join(os.path.dirname(__file__), ".."))
+    _repo_fonts = os.path.join(_repo_root, "assets", "fonts")
+
+    # Windows-Systemfonts
+    _win_fonts = os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "Fonts")
+
+    # ReportLab-eigene gebündelte Fonts
+    import reportlab as _rl
+    _rl_fonts = os.path.join(os.path.dirname(_rl.__file__), "fonts")
+
+    heavy_path = _find_first_existing(
+        # 1. Repo: erwarte dort z. B. "Badge-Heavy.ttf" o.ä.
+        os.path.join(_repo_fonts, "Badge-Heavy.ttf"),
+        # 2. Windows: Arial Bold
+        os.path.join(_win_fonts, "arialbd.ttf"),
+        # 3. ReportLab gebündelt: Vera Bold
+        os.path.join(_rl_fonts, "VeraBd.ttf"),
+    )
+    regular_path = _find_first_existing(
+        os.path.join(_repo_fonts, "Badge-Regular.ttf"),
+        os.path.join(_win_fonts, "arial.ttf"),
+        os.path.join(_rl_fonts, "Vera.ttf"),
+    )
+
+    heavy = "Helvetica-Bold"
+    regular = "Helvetica"
+
+    if heavy_path:
+        pdfmetrics.registerFont(TTFont("BadgeHeavy", heavy_path))
+        heavy = "BadgeHeavy"
+    if regular_path:
+        pdfmetrics.registerFont(TTFont("BadgeRegular", regular_path))
+        regular = "BadgeRegular"
+
+    return heavy, regular
+
+
+_FONT_HEAVY, _FONT_REGULAR = _register_badge_fonts()
+
+FONT_NAME_FIRST   = _FONT_HEAVY
+FONT_NAME_LAST    = _FONT_HEAVY
+FONT_NAME_COMPANY = _FONT_HEAVY
+FONT_NAME_JOB     = _FONT_REGULAR
+
+FONT_SIZE_FIRST_MAX   = 52
+FONT_SIZE_LAST_MAX    = 48
 FONT_SIZE_COMPANY_MAX = 40
-FONT_SIZE_JOB_MAX = 30
-FONT_SIZE_ID = 9
+FONT_SIZE_JOB_MAX     = 30
 
 MIN_FONT_SIZE = 12
+
 
 def _wrap_words(c: canvas.Canvas, text: str, font: str, size: int, max_width: float) -> List[str]:
     if not text:
@@ -64,11 +126,13 @@ def _wrap_words(c: canvas.Canvas, text: str, font: str, size: int, max_width: fl
         lines.append(current)
     return lines
 
+
 def _text_height(font: str, size: int) -> float:
     ascent = pdfmetrics.getAscent(font) * size / 1000.0
     descent = pdfmetrics.getDescent(font) * size / 1000.0
     glyph_h = ascent - descent
     return glyph_h * 1.05
+
 
 def _fit_text_in_box(
     c: canvas.Canvas,
@@ -110,6 +174,7 @@ def _fit_text_in_box(
         lines[-1] = (last + "…") if last else "…"
     return lines, size, line_h
 
+
 def _draw_centered_lines_in_box(
     c: canvas.Canvas,
     lines: List[str],
@@ -133,9 +198,11 @@ def _draw_centered_lines_in_box(
     for i, ln in enumerate(lines):
         c.drawCentredString(x_center, baseline - i * line_h, ln)
 
+
 def _mm_box_to_points(box_mm: Tuple[float, float, float, float]) -> Tuple[float, float, float, float]:
     x0_mm, x1_mm, y0_mm, y1_mm = box_mm
     return x0_mm * mm, x1_mm * mm, y0_mm * mm, y1_mm * mm
+
 
 def render_badges_pdf_bytes(
     rows: List[Dict[str, Any]],
@@ -143,16 +210,14 @@ def render_badges_pdf_bytes(
     *,
     uppercase_names: bool,
     uppercase_company: bool,
-    print_record_id: bool,
 ) -> bytes:
     buf = BytesIO()
     c = canvas.Canvas(buf, pagesize=(A6_W, A6_H))
 
-    box_first = _mm_box_to_points(TEXT_BOXES_MM["firstname"])
-    box_last = _mm_box_to_points(TEXT_BOXES_MM["lastname"])
-    box_job = _mm_box_to_points(TEXT_BOXES_MM["jobtitle"])
+    box_first   = _mm_box_to_points(TEXT_BOXES_MM["firstname"])
+    box_last    = _mm_box_to_points(TEXT_BOXES_MM["lastname"])
+    box_job     = _mm_box_to_points(TEXT_BOXES_MM["jobtitle"])
     box_company = _mm_box_to_points(TEXT_BOXES_MM["company"])
-    box_id = _mm_box_to_points(TEXT_BOXES_MM["record_id"])
 
     for r in rows:
         cat = (r.get("kategorie") or "").strip()
@@ -168,14 +233,14 @@ def render_badges_pdf_bytes(
         c.drawImage(ImageReader(tpl), 0, 0, width=A6_W, height=A6_H, mask="auto")
 
         firstname = (r.get("firstname") or "").strip()
-        lastname = (r.get("lastname") or "").strip()
-        jobtitle = (r.get("jobtitle") or "").strip()
-        company = (r.get("company") or "").strip()
+        lastname  = (r.get("lastname")  or "").strip()
+        jobtitle  = (r.get("jobtitle")  or "").strip()
+        company   = (r.get("company")   or "").strip()
         record_id = str(r.get("id") or "").strip()
 
         if uppercase_names:
             firstname = firstname.upper()
-            lastname = lastname.upper()
+            lastname  = lastname.upper()
         if uppercase_company:
             company = company.upper()
 
@@ -189,32 +254,15 @@ def render_badges_pdf_bytes(
         lines, size, lh = _fit_text_in_box(c, lastname, FONT_NAME_LAST, FONT_SIZE_LAST_MAX, MIN_FONT_SIZE, x1-x0, y1-y0, 2)
         _draw_centered_lines_in_box(c, lines, FONT_NAME_LAST, size, x0, x1, y0, y1, lh)
 
-        # Firma (3. von oben)
-        x0, x1, y0, y1 = box_company
-        lines, size, lh = _fit_text_in_box(c, company, FONT_NAME_COMPANY, FONT_SIZE_COMPANY_MAX, MIN_FONT_SIZE, x1-x0, y1-y0, 2)
-        _draw_centered_lines_in_box(c, lines, FONT_NAME_COMPANY, size, x0, x1, y0, y1, lh)
-
-        # Jobtitel (4. von oben)
+        # Jobtitel (direkt unter Nachname)
         x0, x1, y0, y1 = box_job
         lines, size, lh = _fit_text_in_box(c, jobtitle, FONT_NAME_JOB, FONT_SIZE_JOB_MAX, MIN_FONT_SIZE, x1-x0, y1-y0, 2)
         _draw_centered_lines_in_box(c, lines, FONT_NAME_JOB, size, x0, x1, y0, y1, lh)
 
-        # Datensatz-ID (Text)
-        if print_record_id and record_id:
-            x0, x1, y0, y1 = box_id
-            lines, size, lh = _fit_text_in_box(
-                c,
-                record_id,
-                FONT_NAME_ID,
-                FONT_SIZE_ID,
-                FONT_SIZE_ID,
-                x1 - x0,
-                y1 - y0,
-                1,
-            )
-            _draw_centered_lines_in_box(
-                c, lines, FONT_NAME_ID, size, x0, x1, y0, y1, lh
-            )
+        # Firma (deutlich tiefer, klare Trennung vom Jobtitel)
+        x0, x1, y0, y1 = box_company
+        lines, size, lh = _fit_text_in_box(c, company, FONT_NAME_COMPANY, FONT_SIZE_COMPANY_MAX, MIN_FONT_SIZE, x1-x0, y1-y0, 2)
+        _draw_centered_lines_in_box(c, lines, FONT_NAME_COMPANY, size, x0, x1, y0, y1, lh)
 
         # QR-Code (kodiert die Datensatz-ID, falls vorhanden, sonst Name+Firma)
         qr_data = record_id or " ".join(
@@ -245,7 +293,6 @@ def render_badges_pdf_bytes(
                 drawing = Drawing(qr_size, qr_size)
 
             drawing.add(qr_widget)
-            # leicht vom Rand einrücken
             renderPDF.draw(drawing, c, qx0, qy0)
 
         c.showPage()

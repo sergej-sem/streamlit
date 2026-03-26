@@ -59,14 +59,12 @@ def _build_pdf_cached(
     tpl_map: Dict[str, str],
     uppercase_names: bool,
     uppercase_company: bool,
-    print_record_id: bool,
 ) -> bytes:
     return render_badges_pdf_bytes(
         rows=df_out.to_dict("records"),
         template_by_category=tpl_map,
         uppercase_names=uppercase_names,
         uppercase_company=uppercase_company,
-        print_record_id=print_record_id,
     )
 
 
@@ -84,7 +82,6 @@ with col_settings:
     st.markdown("### Ausgabe")
     uppercase_names = st.checkbox("Vor-/Nachname in GROSSBUCHSTABEN", value=True)
     uppercase_company = st.checkbox("Firma in GROSSBUCHSTABEN", value=True)
-    print_record_id = st.checkbox("Datensatz-ID unten mitdrucken", value=True)
 
     with st.expander("Templates (optional)", expanded=False):
         tpl_map = {
@@ -240,7 +237,6 @@ current_sig = (
     event_tag.strip(),
     bool(uppercase_names),
     bool(uppercase_company),
-    bool(print_record_id),
     tuple(sorted(tpl_map.items())),
 )
 
@@ -255,7 +251,6 @@ with st.spinner("PDF wird vorbereitet …"):
             tpl_map=tpl_map,
             uppercase_names=uppercase_names,
             uppercase_company=uppercase_company,
-            print_record_id=print_record_id,
         )
     except Exception as e:
         st.error(f"❌ PDF-Erstellung fehlgeschlagen: {e}")
