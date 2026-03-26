@@ -16,7 +16,8 @@ P_LASTNAME = "lastname"
 P_COMPANY = "company"
 P_JOBTITLE = "jobtitle"
 P_HISTORIE = "historie"
-SEARCH_PROPERTIES = [P_FIRSTNAME, P_LASTNAME, P_COMPANY, P_JOBTITLE, P_HISTORIE]
+P_EMAIL = "email"
+SEARCH_PROPERTIES = [P_FIRSTNAME, P_LASTNAME, P_COMPANY, P_JOBTITLE, P_HISTORIE, P_EMAIL]
 
 
 class HubSpotAPIError(RuntimeError):
@@ -128,6 +129,7 @@ def _rows_from_contacts(contacts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 "company": properties.get(P_COMPANY) or "",
                 "jobtitle": properties.get(P_JOBTITLE) or "",
                 "historie": properties.get(P_HISTORIE) or "",
+                "email": (properties.get(P_EMAIL) or "").strip(),
             }
         )
     return rows
@@ -179,5 +181,5 @@ def search_compiled_groups(
     rows = _rows_from_contacts(list(by_id.values()))
     return pd.DataFrame(
         rows,
-        columns=["id", "firstname", "lastname", "company", "jobtitle", "historie"],
+        columns=["id", "firstname", "lastname", "company", "jobtitle", "historie", "email"],
     )

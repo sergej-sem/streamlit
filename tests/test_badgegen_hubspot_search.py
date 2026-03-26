@@ -105,6 +105,7 @@ class RowsFromContactsTests(unittest.TestCase):
                     "company": "",
                     "jobtitle": "",
                     "historie": "",
+                    "email": "",
                 }
             ],
             rows,
@@ -167,7 +168,7 @@ class SearchCompiledGroupsTests(unittest.TestCase):
 
         self.assertEqual(2, mock_search_group.call_count)
         self.assertEqual(
-            ["id", "firstname", "lastname", "company", "jobtitle", "historie"],
+            ["id", "firstname", "lastname", "company", "jobtitle", "historie", "email"],
             list(result.columns),
         )
 
@@ -180,6 +181,7 @@ class SearchCompiledGroupsTests(unittest.TestCase):
                 "company": "Acme GmbH",
                 "jobtitle": "",
                 "historie": "26DOR",
+                "email": "",
             },
             rows_by_id["1"],
         )
@@ -191,6 +193,7 @@ class SearchCompiledGroupsTests(unittest.TestCase):
                 "company": "Beta AG",
                 "jobtitle": "Manager",
                 "historie": "",
+                "email": "",
             },
             rows_by_id["2"],
         )
