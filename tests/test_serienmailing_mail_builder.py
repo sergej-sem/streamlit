@@ -28,6 +28,21 @@ class BuildHtmlBodyTests(unittest.TestCase):
         body = self._body(text="Wichtige Info")
         self.assertIn("Wichtige Info", body)
 
+    def test_firma_placeholder_in_body(self):
+        body = build_html_body("Max", "Hallo {firma}!", "", firma="ACME GmbH")
+        self.assertIn("ACME GmbH", body)
+        self.assertNotIn("{firma}", body)
+
+    def test_email_placeholder_in_body(self):
+        body = build_html_body("Max", "Ihre E-Mail: {email}", "", email="max@example.com")
+        self.assertIn("max@example.com", body)
+        self.assertNotIn("{email}", body)
+
+    def test_vorname_placeholder_in_body(self):
+        body = build_html_body("Anna", "Hallo {vorname}, wie geht's?", "")
+        self.assertIn("Hallo Anna, wie geht&#x27;s?", body)
+        self.assertNotIn("{vorname}", body)
+
     def test_newlines_converted_to_br(self):
         body = self._body(text="Zeile 1\nZeile 2")
         self.assertIn("<br>", body)
@@ -79,6 +94,10 @@ class BuildSubjectTests(unittest.TestCase):
     def test_both_placeholders(self):
         result = build_subject("{vorname} von {firma}", "Eva", "MSE")
         self.assertEqual(result, "Eva von MSE")
+
+    def test_email_placeholder_replaced(self):
+        result = build_subject("An: {email}", "X", "Y", "x@example.com")
+        self.assertEqual(result, "An: x@example.com")
 
     def test_no_placeholder(self):
         result = build_subject("Einladung", "X", "Y")

@@ -21,8 +21,10 @@ SIGNATURE_SEVERIN_HTML: str = (
 )
 
 
-def build_html_body(vorname: str, text: str, signature_html: str) -> str:
+def build_html_body(vorname: str, text: str, signature_html: str, firma: str = "", email: str = "") -> str:
     """Build personalized HTML email body.
+
+    Placeholders {vorname}, {firma}, {email} in `text` are replaced before HTML-escaping.
 
     Structure:
         Hallo {vorname},
@@ -32,8 +34,9 @@ def build_html_body(vorname: str, text: str, signature_html: str) -> str:
     """
     greeting = f"Hallo {_html_mod.escape(vorname)},"
 
-    # Escape text content, then convert newlines to <br>
-    escaped_text = _html_mod.escape(text).replace("\n", "<br>\n")
+    # Replace placeholders first, then escape and convert newlines
+    personalized = text.replace("{vorname}", vorname).replace("{firma}", firma).replace("{email}", email)
+    escaped_text = _html_mod.escape(personalized).replace("\n", "<br>\n")
 
     sig_block = f"<br>{signature_html}" if signature_html.strip() else ""
 
@@ -47,6 +50,11 @@ def build_html_body(vorname: str, text: str, signature_html: str) -> str:
     return body
 
 
-def build_subject(template: str, vorname: str, firma: str) -> str:
-    """Replace {vorname} and {firma} placeholders in subject template."""
-    return template.replace("{vorname}", vorname).replace("{firma}", firma)
+def build_subject(template: str, vorname: str, firma: str, email: str = "") -> str:
+    """Replace {vorname}, {firma} and {email} placeholders in subject template."""
+    return (
+        template
+        .replace("{vorname}", vorname)
+        .replace("{firma}", firma)
+        .replace("{email}", email)
+    )

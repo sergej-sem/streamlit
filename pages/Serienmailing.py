@@ -3,6 +3,8 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
+from streamlit_searchbox import st_searchbox
+
 from serienmailing.contacts import (
     COLS,
     contacts_from_excel,
@@ -18,6 +20,26 @@ st.set_page_config(page_title="Serienmailing", layout="wide")
 
 _CONFIRM_WORD = "ENTWÜRFE"
 _SEVERIN_ADDR = "severin.wagner@mysecurityevent.de"
+
+SENDER_EMAIL_SUGGESTIONS = [
+    "severin.wagner@mysecurityevent.de",
+    "alexander.christoph@mysecurityevent.de",
+    "arya.ghaderi@mysecurityevent.de",
+    "luisa.lutzenburg@mysecurityevent.de",
+    "marc.plewnia@mysecurityevent.de",
+    "melvyn.kraeusel@mysecurityevent.de",
+    "milena.rusczyk@mysecurityevent.de",
+    "robert.duske@mysecurityevent.de",
+]
+
+
+def _search_sender_emails(searchterm: str) -> list[str]:
+    term = (searchterm or "").strip().lower()
+    if not term:
+        return SENDER_EMAIL_SUGGESTIONS
+    startswith = [e for e in SENDER_EMAIL_SUGGESTIONS if e.lower().startswith(term)]
+    contains   = [e for e in SENDER_EMAIL_SUGGESTIONS if term in e.lower() and e not in startswith]
+    return startswith + contains
 
 
 def _init_state() -> None:
@@ -60,7 +82,17 @@ imap_host, imap_port, imap_folder, imap_ssl = _load_imap_defaults()
 
 col_cred_a, col_cred_b = st.columns(2)
 with col_cred_a:
-    imap_user = st.text_input("E-Mail-Adresse (Absender)")
+    imap_user = st_searchbox(
+        _search_sender_emails,
+        key="sm_sender_email",
+        label="E-Mail-Adresse (Absender)",
+        placeholder="vorname.nachname@mysecurityevent.de",
+        default="",
+        default_use_searchterm=True,
+        default_options=SENDER_EMAIL_SUGGESTIONS,
+        edit_after_submit="option",
+    )
+    imap_user = imap_user or ""
 with col_cred_b:
     imap_pass = st.text_input("Passwort", type="password")
 
@@ -151,12 +183,13 @@ st.subheader("E-Mail")
 subject_tpl = st.text_input(
     "Betreff",
     placeholder="z. B. Einladung – {firma}",
-    help="Platzhalter: {vorname}, {firma}",
+    help="Platzhalter: {vorname}, {firma}, {email}",
 )
 mail_text = st.text_area(
     "Text",
     height=200,
     placeholder="Ihr Text hier …\n\nZeilenumbrüche werden korrekt übernommen.",
+    help="Platzhalter: {vorname}, {firma}, {email}",
 )
 
 attachment_file = st.file_uploader("Anhang (optional)", key="sm_attachment")
@@ -178,8 +211,8 @@ if contacts_df is not None and not contacts_df.empty and subject_tpl and mail_te
         label_visibility="collapsed",
     )
     preview_row = contacts_df.iloc[preview_idx]
-    preview_subject = build_subject(subject_tpl, preview_row["vorname"], preview_row["firma"])
-    preview_body = build_html_body(preview_row["vorname"], mail_text, sig_html)
+    preview_subject = build_subject(subject_tpl, preview_row["vorname"], preview_row["firma"], preview_row["email"])
+    preview_body = build_html_body(preview_row["vorname"], mail_text, sig_html, preview_row["firma"], preview_row["email"])
     st.caption(f"Betreff: {preview_subject}")
     st.html(preview_body)
 
@@ -215,8 +248,8 @@ if st.button("Entwürfe erstellen", disabled=not ready, type="primary"):
             to_email=row["email"],
             vorname=row["vorname"],
             firma=row["firma"],
-            subject=build_subject(subject_tpl, row["vorname"], row["firma"]),
-            html_body=build_html_body(row["vorname"], mail_text, sig_html),
+            subject=build_subject(subject_tpl, row["vorname"], row["firma"], row["email"]),
+            html_body=build_html_body(row["vorname"], mail_text, sig_html, row["firma"], row["email"]),
             attachment_bytes=attachment_bytes,
             attachment_filename=attachment_name,
         )
@@ -237,7 +270,7 @@ if st.button("Entwürfe erstellen", disabled=not ready, type="primary"):
             results = create_serienmailing_drafts(mails, config)
             st.session_state["sm_draft_result"] = results
         except Exception as exc:
-            st.error(f"Fehler: {exc}")
+            st.error(str(exc))
 
 # ── Ergebnis-Tabelle ──────────────────────────────────────────────────────────
 draft_result = st.session_state.get("sm_draft_result")

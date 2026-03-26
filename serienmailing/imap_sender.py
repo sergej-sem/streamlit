@@ -93,6 +93,18 @@ def _connect(config: MailConfig):
     return imaplib.IMAP4(config.host, config.port)
 
 
+def _friendly_imap_error(raw: str) -> str:
+    """Translate raw IMAP/network error strings into user-friendly German messages."""
+    s = raw.lower()
+    if "authenticationfailed" in s or "authentication failed" in s or "invalid credentials" in s:
+        return "Anmeldung fehlgeschlagen. Bitte E-Mail-Adresse und Passwort prüfen."
+    if "nonexistent" in s or "mailbox does not exist" in s or "no such mailbox" in s:
+        return "Entwurfs-Ordner nicht gefunden. Bitte den Ordnernamen in den Einstellungen prüfen."
+    if "connection refused" in s or "timed out" in s or "errno" in s:
+        return "Verbindung zum Mailserver fehlgeschlagen. Bitte Netzwerk und Serveradresse prüfen."
+    return raw
+
+
 def create_serienmailing_drafts(
     mails: list[SerienMail],
     config: MailConfig,
@@ -106,18 +118,19 @@ def create_serienmailing_drafts(
     if not config.drafts_folder.strip():
         raise ValueError("Der Ordner für Entwürfe darf nicht leer sein.")
 
-    connection = _connect(config)
+    try:
+        connection = _connect(config)
+        connection.login(config.username, config.password)
+    except (OSError, imaplib.IMAP4.error) as exc:
+        raise RuntimeError(_friendly_imap_error(str(exc))) from exc
+
     results: list[SerienMailResult] = []
 
     try:
-        login_status, login_data = connection.login(config.username, config.password)
-        if login_status != "OK":
-            raise RuntimeError(f"Anmeldung fehlgeschlagen: {login_data}")
-
         select_status, select_data = connection.select(config.drafts_folder)
         if select_status != "OK":
             raise RuntimeError(
-                f"Ordner '{config.drafts_folder}' konnte nicht geöffnet werden: {select_data}"
+                _friendly_imap_error(f"nonexistent: {config.drafts_folder} {select_data}")
             )
 
         for mail in mails:
@@ -145,7 +158,7 @@ def create_serienmailing_drafts(
                     firma=mail.firma,
                     subject=mail.subject,
                     status="error",
-                    details=str(exc),
+                    details=_friendly_imap_error(str(exc)),
                 ))
     finally:
         try:
