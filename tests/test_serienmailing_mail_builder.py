@@ -52,12 +52,18 @@ class BuildHtmlBodyTests(unittest.TestCase):
     def test_returns_string(self):
         self.assertIsInstance(self._body(), str)
 
-    def test_signature_after_hr(self):
-        body = self._body()
-        hr_pos = body.find("<hr>")
+    def test_signature_after_text(self):
+        body = self._body(text="Mailtext")
+        text_pos = body.find("Mailtext")
         sig_pos = body.find("Severin Wagner")
-        self.assertGreater(hr_pos, 0)
-        self.assertGreater(sig_pos, hr_pos)
+        self.assertGreater(text_pos, 0)
+        self.assertGreater(sig_pos, text_pos)
+        self.assertNotIn("<hr>", body)
+
+    def test_no_signature_when_empty(self):
+        body = build_html_body("Anna", "Text", "")
+        self.assertNotIn("Severin", body)
+        self.assertNotIn("<br>", body.split("Text")[1])  # no trailing <br> after text block
 
 
 class BuildSubjectTests(unittest.TestCase):

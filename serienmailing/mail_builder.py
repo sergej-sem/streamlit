@@ -28,20 +28,20 @@ def build_html_body(vorname: str, text: str, signature_html: str) -> str:
         Hallo {vorname},
         <blank line>
         {text — plain text, newlines → <br>}
-        <hr>
-        {signature_html}
+        [<br> + signature_html, only if signature_html is non-empty]
     """
     greeting = f"Hallo {_html_mod.escape(vorname)},"
 
     # Escape text content, then convert newlines to <br>
     escaped_text = _html_mod.escape(text).replace("\n", "<br>\n")
 
+    sig_block = f"<br>{signature_html}" if signature_html.strip() else ""
+
     body = (
         '<div style="font-family:Calibri,Arial,sans-serif;font-size:11pt;">'
         f"<p>{greeting}</p>"
         f"<p>{escaped_text}</p>"
-        "<hr>"
-        f"{signature_html}"
+        f"{sig_block}"
         "</div>"
     )
     return body

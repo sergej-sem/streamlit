@@ -17,6 +17,7 @@ from shared.config import ConfigError, load_imap_draft_settings
 st.set_page_config(page_title="Serienmailing", layout="wide")
 
 _CONFIRM_WORD = "ENTWÜRFE"
+_SEVERIN_ADDR = "severin.wagner@mysecurityevent.de"
 
 
 def _init_state() -> None:
@@ -54,24 +55,14 @@ _init_state()
 st.title("Serienmailing")
 
 # ── 1. IMAP-Zugangsdaten ──────────────────────────────────────────────────────
-default_host, default_port, default_folder, default_ssl = _load_imap_defaults()
+# host/port/folder/ssl kommen aus st.secrets ([mse_imap_mail_drafts]) — unsichtbar für den Benutzer
+imap_host, imap_port, imap_folder, imap_ssl = _load_imap_defaults()
 
-with st.expander("IMAP-Zugangsdaten", expanded=True):
-    col_a, col_b, col_c = st.columns([3, 1, 2])
-    with col_a:
-        imap_host = st.text_input("Server", value=default_host)
-    with col_b:
-        imap_port = st.number_input("Port", value=default_port, min_value=1, max_value=65535, step=1)
-    with col_c:
-        imap_folder = st.text_input("Entwurfs-Ordner", value=default_folder)
-
-    col_d, col_e, col_f = st.columns([3, 3, 1])
-    with col_d:
-        imap_user = st.text_input("E-Mail-Adresse (Absender)")
-    with col_e:
-        imap_pass = st.text_input("Passwort", type="password")
-    with col_f:
-        imap_ssl = st.checkbox("SSL", value=default_ssl)
+col_cred_a, col_cred_b = st.columns(2)
+with col_cred_a:
+    imap_user = st.text_input("E-Mail-Adresse (Absender)")
+with col_cred_b:
+    imap_pass = st.text_input("Passwort", type="password")
 
 st.divider()
 
@@ -105,8 +96,13 @@ with tab_hs:
             st.info("Keine HubSpot-Listen gefunden.")
         else:
             list_options = {f"{l.get('name', l.get('listId', '?'))} ({l.get('listId', '?')})": l.get("listId") for l in lists}
-            selected_label = st.selectbox("Liste auswählen", options=list(list_options.keys()))
-            if st.button("Liste laden", key="btn_hs_load"):
+            selected_label = st.selectbox(
+                "Liste auswählen",
+                options=list(list_options.keys()),
+                index=None,
+                placeholder="Bitte Liste auswählen …",
+            )
+            if st.button("Liste laden", key="btn_hs_load", disabled=selected_label is None):
                 with st.spinner("Kontakte werden geladen …"):
                     try:
                         contacts = _load_hubspot_contacts(list_options[selected_label])
@@ -166,6 +162,9 @@ mail_text = st.text_area(
 attachment_file = st.file_uploader("Anhang (optional)", key="sm_attachment")
 
 # ── Vorschau ──────────────────────────────────────────────────────────────────
+# Signatur nur für Severin
+sig_html = SIGNATURE_SEVERIN_HTML if imap_user.strip().lower() == _SEVERIN_ADDR else ""
+
 if contacts_df is not None and not contacts_df.empty and subject_tpl and mail_text:
     st.markdown("**Vorschau**")
     preview_labels = [
@@ -180,7 +179,7 @@ if contacts_df is not None and not contacts_df.empty and subject_tpl and mail_te
     )
     preview_row = contacts_df.iloc[preview_idx]
     preview_subject = build_subject(subject_tpl, preview_row["vorname"], preview_row["firma"])
-    preview_body = build_html_body(preview_row["vorname"], mail_text, SIGNATURE_SEVERIN_HTML)
+    preview_body = build_html_body(preview_row["vorname"], mail_text, sig_html)
     st.caption(f"Betreff: {preview_subject}")
     st.html(preview_body)
 
@@ -200,7 +199,7 @@ confirmed = confirm_input.strip() == expected_confirm and n_contacts > 0
 
 ready = (
     confirmed
-    and bool(imap_host.strip())
+    and bool(imap_host)
     and bool(imap_user.strip())
     and bool(imap_pass)
     and bool(subject_tpl.strip())
@@ -217,7 +216,7 @@ if st.button("Entwürfe erstellen", disabled=not ready, type="primary"):
             vorname=row["vorname"],
             firma=row["firma"],
             subject=build_subject(subject_tpl, row["vorname"], row["firma"]),
-            html_body=build_html_body(row["vorname"], mail_text, SIGNATURE_SEVERIN_HTML),
+            html_body=build_html_body(row["vorname"], mail_text, sig_html),
             attachment_bytes=attachment_bytes,
             attachment_filename=attachment_name,
         )
@@ -225,11 +224,11 @@ if st.button("Entwürfe erstellen", disabled=not ready, type="primary"):
     ]
 
     config = MailConfig(
-        host=imap_host.strip(),
-        port=int(imap_port),
+        host=imap_host,
+        port=imap_port,
         username=imap_user.strip(),
         password=imap_pass,
-        drafts_folder=imap_folder.strip() or "Drafts",
+        drafts_folder=imap_folder or "Drafts",
         use_ssl=imap_ssl,
     )
 
@@ -243,14 +242,12 @@ if st.button("Entwürfe erstellen", disabled=not ready, type="primary"):
 # ── Ergebnis-Tabelle ──────────────────────────────────────────────────────────
 draft_result = st.session_state.get("sm_draft_result")
 if draft_result:
-    status_labels = {"draft_created": "Entwurf gespeichert", "error": "Fehler"}
     result_rows = [
         {
             "Vorname": r.vorname,
             "Firma": r.firma,
             "E-Mail": r.to_email,
-            "Status": status_labels.get(r.status, r.status),
-            "Hinweis": r.details or "",
+            "Status": r.details if r.status == "error" and r.details else "Entwurf gespeichert",
         }
         for r in draft_result
     ]
