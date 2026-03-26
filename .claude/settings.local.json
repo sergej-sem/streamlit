@@ -14,7 +14,8 @@
       "Bash(wc -l c:/Users/admin/Sergej/streamlit/badgegen/*.py c:/Users/admin/Sergej/streamlit/excel_druckbereit_generator/*.py c:/Users/admin/Sergej/streamlit/microsoft_bulk_user/*.py c:/Users/admin/Sergej/streamlit/packliste/*.py c:/Users/admin/Sergej/streamlit/sponsor_deadline_mails/*.py c:/Users/admin/Sergej/streamlit/teilnehmerliste_generator/*.py)",
       "Bash(wc -l c:/Users/admin/Sergej/streamlit/tests/*.py)",
       "Bash(xargs grep:*)",
-      "Bash(ls -la c:/Users/admin/Sergej/streamlit/*.py)"
+      "Bash(ls -la c:/Users/admin/Sergej/streamlit/*.py)",
+      "Bash(python -m unittest discover -s tests -p \"test_badgegen_*.py\" -v)"
     ]
   }
 }

@@ -4,6 +4,7 @@ import os
 from io import BytesIO
 from typing import Dict, Any, List, Tuple
 
+from reportlab.lib import colors
 from reportlab.lib.units import mm
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfbase import pdfmetrics
@@ -28,6 +29,29 @@ TEXT_BOXES_MM = {
 
 # QR-Code: 30 mm Quadrat, horizontal zentriert, unterer Bereich
 QR_BOX_MM = (37.5, 67.5, 10.0, 40.0)
+
+# ---------------------------------------------------------------------------
+# QR-Code-Farben je Kategorie
+# Nur dunkle Farben, damit der QR-Code sicher scannbar bleibt.
+# Standardfarbe ist schwarz (colored=False oder unbekannte Kategorie).
+# ---------------------------------------------------------------------------
+_QR_COLOR_BY_CATEGORY = {
+    "TN":      colors.HexColor("#1a7a1a"),  # dunkelgrün
+    "VIP/REF": colors.HexColor("#B8860B"),  # dunkles Gold
+    "Sponsor": colors.black,
+    "BEO":     colors.HexColor("#660099"),  # dunkelviolett
+    "Team":    colors.HexColor("#cc0000"),  # dunkelrot
+}
+_QR_COLOR_DEFAULT = colors.black
+
+
+def _qr_color_for_category(kategorie: str, colored: bool) -> object:
+    """Gibt die QR-Vordergrundfarbe für eine Kategorie zurück.
+    Bei colored=False oder unbekannter Kategorie immer schwarz."""
+    if not colored:
+        return _QR_COLOR_DEFAULT
+    return _QR_COLOR_BY_CATEGORY.get((kategorie or "").strip(), _QR_COLOR_DEFAULT)
+
 
 # ---------------------------------------------------------------------------
 # Font-Registrierung mit Fallback-Kette
@@ -210,6 +234,7 @@ def render_badges_pdf_bytes(
     *,
     uppercase_names: bool,
     uppercase_company: bool,
+    colored_qr: bool = False,
 ) -> bytes:
     buf = BytesIO()
     c = canvas.Canvas(buf, pagesize=(A6_W, A6_H))
@@ -226,7 +251,9 @@ def render_badges_pdf_bytes(
         if cat not in template_by_category:
             raise ValueError(f"Kein Template für Kategorie: {cat}")
 
-        tpl = template_by_category[cat]
+        # Im Farbmodus: für alle Badges das Sponsoren-Template verwenden
+        tpl_key = "Sponsor" if (colored_qr and "Sponsor" in template_by_category) else cat
+        tpl = template_by_category[tpl_key]
         if not os.path.exists(tpl):
             raise FileNotFoundError(f"Template-Datei nicht gefunden: {tpl}")
 
@@ -276,7 +303,8 @@ def render_badges_pdf_bytes(
             qr_box_h = qy1 - qy0
             qr_size = min(qr_box_w, qr_box_h)
 
-            qr_widget = qr.QrCodeWidget(qr_data)
+            qr_color = _qr_color_for_category(cat, colored_qr)
+            qr_widget = qr.QrCodeWidget(qr_data, barFillColor=qr_color)
             bounds = qr_widget.getBounds()
             w = bounds[2] - bounds[0]
             h = bounds[3] - bounds[1]

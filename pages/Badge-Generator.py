@@ -59,12 +59,14 @@ def _build_pdf_cached(
     tpl_map: Dict[str, str],
     uppercase_names: bool,
     uppercase_company: bool,
+    colored_qr: bool,
 ) -> bytes:
     return render_badges_pdf_bytes(
         rows=df_out.to_dict("records"),
         template_by_category=tpl_map,
         uppercase_names=uppercase_names,
         uppercase_company=uppercase_company,
+        colored_qr=colored_qr,
     )
 
 
@@ -74,11 +76,19 @@ uppercase_names = True
 uppercase_company = True
 tpl_map = dict(DEFAULT_TEMPLATES)
 
+# Historie-Präfix: Dropdown oben, direkt vor den Filtern
+st.markdown("### Historie-Präfix")
+event_tag = st.selectbox(
+    "Historie-Präfix",
+    options=["26DOR", "26BER", "26MUC"],
+    index=0,
+    label_visibility="collapsed",
+)
+
 col_filters, col_settings = st.columns([0.68, 0.32], gap="large")
 
 with col_settings:
-    st.markdown("### Event / Kategorie")
-    event_tag = st.text_input("Event-Tag (für Kategorie-Ermittlung)", value="26DOR")
+    colored_qr = st.checkbox("Farbige QR-Codes", value=False)
 
 with col_filters:
     historie_opts = _cached_historie_options()
@@ -225,6 +235,7 @@ current_sig = (
     event_tag.strip(),
     bool(uppercase_names),
     bool(uppercase_company),
+    bool(colored_qr),
     tuple(sorted(tpl_map.items())),
 )
 
@@ -239,6 +250,7 @@ with st.spinner("PDF wird vorbereitet …"):
             tpl_map=tpl_map,
             uppercase_names=uppercase_names,
             uppercase_company=uppercase_company,
+            colored_qr=colored_qr,
         )
     except Exception as e:
         st.error(f"❌ PDF-Erstellung fehlgeschlagen: {e}")

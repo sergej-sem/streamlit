@@ -20,6 +20,8 @@ sys.path.insert(0, os.path.normpath(os.path.join(os.path.dirname(__file__), ".."
 
 from reportlab.pdfgen import canvas as rl_canvas
 
+from reportlab.lib import colors as rl_colors
+
 from badgegen.render_pdf import (
     MIN_FONT_SIZE,
     FONT_NAME_FIRST,
@@ -31,7 +33,10 @@ from badgegen.render_pdf import (
     FONT_SIZE_COMPANY_MAX,
     FONT_SIZE_JOB_MAX,
     TEXT_BOXES_MM,
+    _QR_COLOR_BY_CATEGORY,
+    _QR_COLOR_DEFAULT,
     _fit_text_in_box,
+    _qr_color_for_category,
     _wrap_words,
     render_badges_pdf_bytes,
 )
@@ -321,6 +326,171 @@ class RenderBadgesPdfBytesTests(unittest.TestCase):
             "print_record_id", sig.parameters,
             "print_record_id wurde nicht vollständig aus der Signatur entfernt"
         )
+
+    # --- colored_qr: Default False, valides PDF ---
+
+    def test_colored_qr_default_false_produces_valid_pdf(self):
+        row = self._make_row("Max", "Mustermann", "CEO", "ACME")
+        result = self._render([row])  # colored_qr nicht übergeben → Default False
+        self.assertTrue(result.startswith(b"%PDF"))
+
+    def test_colored_qr_true_all_categories_no_crash(self):
+        for cat in ["TN", "VIP/REF", "Sponsor", "BEO", "Team"]:
+            with self.subTest(cat=cat):
+                row = self._make_row("Max", "Mustermann", "CEO", "ACME", cat=cat)
+                result = render_badges_pdf_bytes(
+                    rows=[row],
+                    template_by_category=self._tpl_map,
+                    uppercase_names=False,
+                    uppercase_company=False,
+                    colored_qr=True,
+                )
+                self.assertTrue(result.startswith(b"%PDF"), f"Kein valides PDF für Kategorie {cat}")
+
+    def test_colored_qr_parameter_has_default_false(self):
+        import inspect
+        sig = inspect.signature(render_badges_pdf_bytes)
+        param = sig.parameters.get("colored_qr")
+        self.assertIsNotNone(param, "colored_qr-Parameter fehlt in render_badges_pdf_bytes")
+        self.assertIs(param.default, False)
+
+
+# ---------------------------------------------------------------------------
+# Tests: _qr_color_for_category
+# ---------------------------------------------------------------------------
+
+class QrColorForCategoryTests(unittest.TestCase):
+
+    # --- colored=False → immer schwarz ---
+
+    def test_colored_false_returns_default_for_known_categories(self):
+        for cat in ["TN", "VIP/REF", "Sponsor", "BEO", "Team"]:
+            with self.subTest(cat=cat):
+                c = _qr_color_for_category(cat, colored=False)
+                self.assertEqual(c, _QR_COLOR_DEFAULT)
+
+    def test_colored_false_returns_default_for_empty(self):
+        self.assertEqual(_qr_color_for_category("", colored=False), _QR_COLOR_DEFAULT)
+
+    def test_colored_false_returns_default_for_unknown(self):
+        self.assertEqual(_qr_color_for_category("UNBEKANNT", colored=False), _QR_COLOR_DEFAULT)
+
+    # --- colored=True, bekannte Kategorien ---
+
+    def test_tn_gets_green(self):
+        c = _qr_color_for_category("TN", colored=True)
+        self.assertNotEqual(c, _QR_COLOR_DEFAULT)
+        self.assertEqual(c, _QR_COLOR_BY_CATEGORY["TN"])
+
+    def test_vip_ref_gets_gold(self):
+        c = _qr_color_for_category("VIP/REF", colored=True)
+        self.assertNotEqual(c, _QR_COLOR_DEFAULT)
+        self.assertEqual(c, _QR_COLOR_BY_CATEGORY["VIP/REF"])
+
+    def test_sponsor_gets_black(self):
+        c = _qr_color_for_category("Sponsor", colored=True)
+        self.assertEqual(c, _QR_COLOR_DEFAULT)
+
+    def test_beo_gets_violet(self):
+        c = _qr_color_for_category("BEO", colored=True)
+        self.assertNotEqual(c, _QR_COLOR_DEFAULT)
+        self.assertEqual(c, _QR_COLOR_BY_CATEGORY["BEO"])
+
+    def test_team_gets_red(self):
+        c = _qr_color_for_category("Team", colored=True)
+        self.assertNotEqual(c, _QR_COLOR_DEFAULT)
+        self.assertEqual(c, _QR_COLOR_BY_CATEGORY["Team"])
+
+    def test_beo_and_vip_different_colors(self):
+        """BEO = violett, VIP/REF = gold — müssen unterschiedlich sein."""
+        self.assertNotEqual(
+            _qr_color_for_category("BEO", colored=True),
+            _qr_color_for_category("VIP/REF", colored=True),
+        )
+
+    # --- colored=True, unbekannte / leere Kategorie → schwarz ---
+
+    def test_empty_category_returns_default(self):
+        self.assertEqual(_qr_color_for_category("", colored=True), _QR_COLOR_DEFAULT)
+
+    def test_none_like_empty_returns_default(self):
+        self.assertEqual(_qr_color_for_category("  ", colored=True), _QR_COLOR_DEFAULT)
+
+    def test_unknown_category_returns_default(self):
+        self.assertEqual(_qr_color_for_category("UNBEKANNT", colored=True), _QR_COLOR_DEFAULT)
+        self.assertEqual(_qr_color_for_category("xyz", colored=True), _QR_COLOR_DEFAULT)
+
+
+# ---------------------------------------------------------------------------
+# Tests: Template-Override bei colored_qr=True (Sponsoren-Template für alle)
+# ---------------------------------------------------------------------------
+
+class ColoredQrTemplateOverrideTests(unittest.TestCase):
+    """
+    Prüft, dass bei colored_qr=True das Sponsoren-Template für alle Badges
+    verwendet wird, und bei colored_qr=False das kategoriale Mapping gilt.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        import tempfile
+        from PIL import Image as _PilImage
+
+        cls._tmpdir = tempfile.mkdtemp()
+
+        # Zwei unterschiedliche Templates: TN (blau) und Sponsor (rot) zur Unterscheidung
+        cls._tn_path = os.path.join(cls._tmpdir, "tn.png")
+        cls._spo_path = os.path.join(cls._tmpdir, "spo.png")
+
+        for path, color in [(cls._tn_path, (0, 0, 255)), (cls._spo_path, (255, 0, 0))]:
+            img = _PilImage.new("RGB", (10, 10), color=color)
+            img.save(path, format="PNG")
+
+        cls._tpl_map = {cat: cls._tn_path for cat in TEMPLATE_CATEGORIES}
+        cls._tpl_map["Sponsor"] = cls._spo_path
+
+    def _render(self, rows, colored_qr):
+        return render_badges_pdf_bytes(
+            rows=rows,
+            template_by_category=self._tpl_map,
+            uppercase_names=False,
+            uppercase_company=False,
+            colored_qr=colored_qr,
+        )
+
+    def _make_row(self, cat):
+        return {
+            "id": "1",
+            "firstname": "Max",
+            "lastname": "Mustermann",
+            "jobtitle": "CEO",
+            "company": "ACME",
+            "kategorie": cat,
+        }
+
+    def test_colored_off_uses_category_template_for_tn(self):
+        """colored_qr=False: TN-Kategorie → TN-Template (kein Crash, kein Override)."""
+        result = self._render([self._make_row("TN")], colored_qr=False)
+        self.assertTrue(result.startswith(b"%PDF"))
+
+    def test_colored_on_uses_sponsor_template_for_tn(self):
+        """colored_qr=True: TN-Kategorie → Sponsoren-Template (kein Crash)."""
+        result = self._render([self._make_row("TN")], colored_qr=True)
+        self.assertTrue(result.startswith(b"%PDF"))
+
+    def test_colored_on_uses_sponsor_template_for_all_categories(self):
+        """colored_qr=True: alle Kategorien → Sponsoren-Template, valides PDF."""
+        for cat in ["TN", "VIP/REF", "Sponsor", "BEO", "Team"]:
+            with self.subTest(cat=cat):
+                result = self._render([self._make_row(cat)], colored_qr=True)
+                self.assertTrue(result.startswith(b"%PDF"), f"Kein valides PDF für {cat}")
+
+    def test_colored_off_all_categories_no_crash(self):
+        """colored_qr=False: alle Kategorien → normales Mapping, kein Crash."""
+        for cat in ["TN", "VIP/REF", "Sponsor", "BEO", "Team"]:
+            with self.subTest(cat=cat):
+                result = self._render([self._make_row(cat)], colored_qr=False)
+                self.assertTrue(result.startswith(b"%PDF"))
 
 
 if __name__ == "__main__":
