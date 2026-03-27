@@ -17,10 +17,6 @@ class BuildHtmlBodyTests(unittest.TestCase):
     def _body(self, vorname="Max", text="Hier ist der Text.", sig=SIGNATURE_SEVERIN_HTML):
         return build_html_body(vorname, text, sig)
 
-    def test_greeting_line_present(self):
-        body = self._body(vorname="Klaus")
-        self.assertIn("Hallo Klaus,", body)
-
     def test_signature_present(self):
         body = self._body()
         self.assertIn("Severin Wagner", body)
@@ -55,10 +51,8 @@ class BuildHtmlBodyTests(unittest.TestCase):
         self.assertGreater(z2_pos, br_pos)
 
     def test_html_special_chars_escaped(self):
-        body = self._body(vorname="<script>", text="<b>bold</b>")
-        self.assertNotIn("<script>", body)
-        self.assertIn("&lt;script&gt;", body)
-        # text also escaped
+        body = self._body(vorname="Klaus", text="<b>bold</b>")
+        self.assertNotIn("<b>bold</b>", body)
         self.assertIn("&lt;b&gt;", body)
 
     def test_custom_signature(self):

@@ -55,13 +55,10 @@ def build_html_body(vorname: str, text: str, signature_html: str, firma: str = "
     Placeholders {vorname}, {firma}, {email} in `text` are replaced before HTML-escaping.
 
     Structure:
-        Hallo {vorname},
-        <blank line>
         {text — plain text, newlines → <br>}
-        [<br> + signature_html, only if signature_html is non-empty]
+        Beste Grüße,
+        [signature_html, only if signature_html is non-empty]
     """
-    greeting = f"Hallo {_html_mod.escape(vorname)},"
-
     # Replace placeholders first, then escape and convert newlines
     personalized = text.replace("{vorname}", vorname).replace("{firma}", firma).replace("{email}", email)
     escaped_text = _html_mod.escape(personalized).replace("\n", "<br>\n")
@@ -70,7 +67,6 @@ def build_html_body(vorname: str, text: str, signature_html: str, firma: str = "
 
     body = (
         '<div style="font-family:Calibri,Arial,sans-serif;font-size:11pt;">'
-        f"<p>{greeting}</p>"
         f"<p>{escaped_text}</p>"
         "<p>Beste Grüße,</p>"
         f"{sig_block}"
