@@ -8,8 +8,8 @@ from dataclasses import dataclass, field
 from email.message import EmailMessage
 from email.policy import SMTP
 from email.utils import formatdate, make_msgid
-from html import unescape
-import re
+
+from serienmailing.mail_builder import html_to_plain_text
 
 
 @dataclass(frozen=True)
@@ -43,16 +43,6 @@ class SerienMailResult:
     details: str
 
 
-def _html_to_plain_text(html_body: str) -> str:
-    text = re.sub(r"(?is)<(script|style).*?>.*?</\1>", "", html_body)
-    text = re.sub(r"(?i)<br\s*/?>", "\n", text)
-    text = re.sub(r"(?i)</p>", "\n\n", text)
-    text = re.sub(r"(?s)<.*?>", "", text)
-    text = unescape(text)
-    text = re.sub(r"\n{3,}", "\n\n", text)
-    return text.strip() or "Please use an HTML-capable email client."
-
-
 def _build_message(mail: SerienMail, config: MailConfig) -> bytes:
     msg = EmailMessage()
     msg["Subject"] = mail.subject
@@ -61,7 +51,7 @@ def _build_message(mail: SerienMail, config: MailConfig) -> bytes:
     msg["Date"] = formatdate(localtime=True)
     msg["Message-ID"] = make_msgid()
 
-    msg.set_content(_html_to_plain_text(mail.html_body))
+    msg.set_content(html_to_plain_text(mail.html_body))
     msg.add_alternative(mail.html_body, subtype="html")
 
     if mail.attachment_bytes and mail.attachment_filename:

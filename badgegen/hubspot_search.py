@@ -126,8 +126,8 @@ def _rows_from_contacts(contacts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 "id": contact.get("id"),
                 "firstname": (properties.get(P_FIRSTNAME) or "").strip(),
                 "lastname": (properties.get(P_LASTNAME) or "").strip(),
-                "company": properties.get(P_COMPANY) or "",
-                "jobtitle": properties.get(P_JOBTITLE) or "",
+                "company": (properties.get(P_COMPANY) or "").strip(),
+                "jobtitle": (properties.get(P_JOBTITLE) or "").strip(),
                 "historie": properties.get(P_HISTORIE) or "",
                 "email": (properties.get(P_EMAIL) or "").strip(),
             }

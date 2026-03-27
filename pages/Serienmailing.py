@@ -13,7 +13,12 @@ from serienmailing.contacts import (
     validate_contacts,
 )
 from serienmailing.imap_sender import MailConfig, SerienMail, create_serienmailing_drafts
-from serienmailing.mail_builder import SIGNATURE_SEVERIN_HTML, build_html_body, build_subject
+from serienmailing.mail_builder import (
+    SENDER_EMAIL_SUGGESTIONS,
+    SIGNATURE_SEVERIN_HTML,
+    build_html_body,
+    build_subject,
+)
 from shared.config import ConfigError, load_imap_draft_settings
 
 st.set_page_config(page_title="Serienmailing", layout="wide")
@@ -21,16 +26,6 @@ st.set_page_config(page_title="Serienmailing", layout="wide")
 _CONFIRM_WORD = "ENTWÜRFE"
 _SEVERIN_ADDR = "severin.wagner@mysecurityevent.de"
 
-SENDER_EMAIL_SUGGESTIONS = [
-    "severin.wagner@mysecurityevent.de",
-    "alexander.christoph@mysecurityevent.de",
-    "arya.ghaderi@mysecurityevent.de",
-    "luisa.lutzenburg@mysecurityevent.de",
-    "marc.plewnia@mysecurityevent.de",
-    "melvyn.kraeusel@mysecurityevent.de",
-    "milena.rusczyk@mysecurityevent.de",
-    "robert.duske@mysecurityevent.de",
-]
 
 
 def _search_sender_emails(searchterm: str) -> list[str]:

@@ -8,6 +8,7 @@ from serienmailing.mail_builder import (
     SIGNATURE_SEVERIN_HTML,
     build_html_body,
     build_subject,
+    html_to_plain_text,
 )
 
 
@@ -124,6 +125,61 @@ class SignatureSeverinTests(unittest.TestCase):
 
     def test_contains_company(self):
         self.assertIn("mysecurityevent", SIGNATURE_SEVERIN_HTML)
+
+
+class HtmlToPlainTextTests(unittest.TestCase):
+    """Tests for html_to_plain_text (shared helper, now lives in mail_builder)."""
+
+    def test_br_converted_to_newline(self):
+        result = html_to_plain_text("<p>Line1</p><br>Line2")
+        self.assertIn("Line1", result)
+        self.assertIn("Line2", result)
+        self.assertIn("\n", result)
+
+    def test_br_selfclosing_with_space(self):
+        result = html_to_plain_text("A<br />B")
+        self.assertIn("\n", result)
+
+    def test_br_selfclosing_no_space(self):
+        result = html_to_plain_text("A<br/>B")
+        self.assertIn("\n", result)
+
+    def test_p_close_tag_adds_blank_line(self):
+        result = html_to_plain_text("<p>Para1</p><p>Para2</p>")
+        self.assertIn("Para1", result)
+        self.assertIn("Para2", result)
+
+    def test_html_tags_stripped(self):
+        result = html_to_plain_text("<b>Bold</b> and <i>italic</i>")
+        self.assertNotIn("<b>", result)
+        self.assertIn("Bold", result)
+
+    def test_script_tag_removed(self):
+        result = html_to_plain_text("<script>alert('xss')</script>Text")
+        self.assertNotIn("alert", result)
+        self.assertIn("Text", result)
+
+    def test_style_tag_removed(self):
+        result = html_to_plain_text("<style>.foo { color: red; }</style>Text")
+        self.assertNotIn("color", result)
+        self.assertIn("Text", result)
+
+    def test_html_entities_unescaped(self):
+        result = html_to_plain_text("&lt;hello&gt; &amp; world")
+        self.assertIn("<hello>", result)
+        self.assertIn("& world", result)
+
+    def test_excessive_newlines_collapsed(self):
+        result = html_to_plain_text("<p>A</p>\n\n\n\n<p>B</p>")
+        self.assertNotIn("\n\n\n", result)
+
+    def test_empty_html_returns_fallback(self):
+        result = html_to_plain_text("")
+        self.assertTrue(len(result) > 0)
+
+    def test_whitespace_only_returns_fallback(self):
+        result = html_to_plain_text("   ")
+        self.assertTrue(len(result) > 0)
 
 
 if __name__ == "__main__":

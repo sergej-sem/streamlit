@@ -6,12 +6,10 @@ from dataclasses import dataclass
 from email.message import EmailMessage
 from email.policy import SMTP
 from email.utils import formatdate, make_msgid
-from html import unescape
-import re
-
 import pandas as pd
 
 from .core import GeneratedMail
+from serienmailing.mail_builder import html_to_plain_text
 
 
 @dataclass(frozen=True)
@@ -37,16 +35,6 @@ class ImapDraftRecord:
     server_response: str
 
 
-def _html_to_plain_text(html_body: str) -> str:
-    text = re.sub(r"(?is)<(script|style).*?>.*?</\\1>", "", html_body)
-    text = re.sub(r"(?i)<br\\s*/?>", "\n", text)
-    text = re.sub(r"(?i)</p>", "\n\n", text)
-    text = re.sub(r"(?s)<.*?>", "", text)
-    text = unescape(text)
-    text = re.sub(r"\n{3,}", "\n\n", text)
-    return text.strip() or "Please use an HTML-capable email client."
-
-
 def _build_message(mail: GeneratedMail, config: ImapDraftConfig) -> bytes:
     message = EmailMessage()
     message["Subject"] = mail.subject
@@ -56,7 +44,7 @@ def _build_message(mail: GeneratedMail, config: ImapDraftConfig) -> bytes:
         message["Cc"] = mail.cc_email
     message["Date"] = formatdate(localtime=True)
     message["Message-ID"] = make_msgid()
-    message.set_content(_html_to_plain_text(mail.html_body))
+    message.set_content(html_to_plain_text(mail.html_body))
     message.add_alternative(mail.html_body, subtype="html")
     return message.as_bytes(policy=SMTP)
 

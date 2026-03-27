@@ -17,7 +17,12 @@ from badgegen.render_pdf import render_badges_pdf_bytes
 from badgegen.filter_builder import render_filter_builder
 from streamlit_searchbox import st_searchbox
 from serienmailing.imap_sender import MailConfig, create_serienmailing_drafts
-from serienmailing.mail_builder import SIGNATURE_SEVERIN_HTML, build_html_body, build_subject
+from serienmailing.mail_builder import (
+    SENDER_EMAIL_SUGGESTIONS,
+    SIGNATURE_SEVERIN_HTML,
+    build_html_body,
+    build_subject,
+)
 from badgegen.badge_mail import build_badge_mails
 from shared.config import ConfigError, get_hubspot_token, load_imap_draft_settings
 from streamlit_ui import render_page_title
@@ -48,24 +53,14 @@ _BG_CONFIRM_WORD  = "ENTWÜRFE"
 _BG_DEFAULT_SUBJECT = "Ihr Badge – {vorname}"
 _BG_DEFAULT_BODY    = "anbei finden Sie Ihren persönlichen Badge für die Veranstaltung."
 
-_BG_SENDER_SUGGESTIONS = [
-    "severin.wagner@mysecurityevent.de",
-    "alexander.christoph@mysecurityevent.de",
-    "arya.ghaderi@mysecurityevent.de",
-    "luisa.lutzenburg@mysecurityevent.de",
-    "marc.plewnia@mysecurityevent.de",
-    "melvyn.kraeusel@mysecurityevent.de",
-    "milena.rusczyk@mysecurityevent.de",
-    "robert.duske@mysecurityevent.de",
-]
 
 
 def _bg_search_senders(searchterm: str) -> list[str]:
     term = (searchterm or "").strip().lower()
     if not term:
-        return _BG_SENDER_SUGGESTIONS
-    startswith = [e for e in _BG_SENDER_SUGGESTIONS if e.lower().startswith(term)]
-    contains   = [e for e in _BG_SENDER_SUGGESTIONS if term in e.lower() and e not in startswith]
+        return SENDER_EMAIL_SUGGESTIONS
+    startswith = [e for e in SENDER_EMAIL_SUGGESTIONS if e.lower().startswith(term)]
+    contains   = [e for e in SENDER_EMAIL_SUGGESTIONS if term in e.lower() and e not in startswith]
     return startswith + contains
 
 
@@ -334,7 +329,7 @@ with st.expander("Badge-Mails als Entwürfe speichern", expanded=False):
             placeholder="vorname.nachname@mysecurityevent.de",
             default="",
             default_use_searchterm=True,
-            default_options=_BG_SENDER_SUGGESTIONS,
+            default_options=SENDER_EMAIL_SUGGESTIONS,
             edit_after_submit="option",
         )
         bg_sender = bg_sender or ""
