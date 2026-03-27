@@ -12,7 +12,7 @@ from badgegen.hubspot_search import (
     search_compiled_groups,
 )
 from badgegen.historie_options import fetch_historie_options
-from badgegen.category import derive_kategorie_from_historie, ALLOWED_CATEGORIES
+from badgegen.category import derive_kategorie_from_historie, ALLOWED_CATEGORIES, EVENT_TAGS
 from badgegen.render_pdf import render_badges_pdf_bytes
 from badgegen.filter_builder import render_filter_builder
 from streamlit_searchbox import st_searchbox
@@ -113,7 +113,7 @@ tpl_map = dict(DEFAULT_TEMPLATES)
 st.markdown("**Historie-Präfix**")
 event_tag = st.selectbox(
     "Historie-Präfix",
-    options=["26DOR", "26BER", "26MUC"],
+    options=EVENT_TAGS,
     index=0,
     label_visibility="collapsed",
 )

@@ -1,87 +1,21 @@
-import requests
+from __future__ import annotations
+
 import streamlit as st
 
-from shared.hubspot import build_headers
+from shared.hubspot import (
+    get_contact_lists as _get_contact_lists,
+    get_contacts_by_ids as _get_contacts_by_ids,
+    get_list_members as _get_list_members,
+)
 
-BASE = "https://api.hubapi.com"
-
-def hs_headers() -> dict:
-    return build_headers(secrets=st.secrets)
 
 def get_contact_lists(count: int = 500) -> list[dict]:
-    """
-    POST /crm/v3/lists/search (offset/count)
-    """
-    url = f"{BASE}/crm/v3/lists/search"
-    offset = 0
-    all_lists: list[dict] = []
+    return _get_contact_lists(secrets=st.secrets, count=count)
 
-    while True:
-        payload = {
-            "offset": offset,
-            "count": min(max(count, 1), 500),
-            "objectTypeId": "0-1",  # Kontakte
-            "query": ""
-        }
-
-        r = requests.post(url, headers=hs_headers(), json=payload, timeout=60)
-        r.raise_for_status()
-        data = r.json()
-
-        batch = data.get("lists", [])
-        all_lists.extend(batch)
-
-        if not data.get("hasMore", False):
-            break
-
-        offset = data.get("offset", offset + len(batch))
-
-    return all_lists
 
 def get_list_members(list_id: str) -> list[str]:
-    """
-    GET /crm/v3/lists/{listId}/memberships
-    -> liefert recordId (Contact IDs)
-    """
-    url = f"{BASE}/crm/v3/lists/{list_id}/memberships"
-    after = None
-    ids: list[str] = []
+    return _get_list_members(list_id, secrets=st.secrets)
 
-    while True:
-        params = {"limit": 100}
-        if after:
-            params["after"] = after
-
-        r = requests.get(url, headers=hs_headers(), params=params, timeout=60)
-        r.raise_for_status()
-        data = r.json()
-
-        ids.extend([str(item["recordId"]) for item in data.get("results", [])])
-
-        after = data.get("paging", {}).get("next", {}).get("after")
-        if not after:
-            break
-
-    return ids
 
 def get_contacts_by_ids(ids: list[str], properties: list[str]) -> list[dict]:
-    """
-    POST /crm/v3/objects/contacts/batch/read
-    """
-    url = f"{BASE}/crm/v3/objects/contacts/batch/read"
-    out: list[dict] = []
-
-    for i in range(0, len(ids), 100):
-        chunk = ids[i:i + 100]
-        payload = {
-            "properties": properties,
-            "inputs": [{"id": str(cid)} for cid in chunk],
-        }
-
-        r = requests.post(url, headers=hs_headers(), json=payload, timeout=60)
-        r.raise_for_status()
-        data = r.json()
-
-        out.extend(data.get("results", []))
-
-    return out
+    return _get_contacts_by_ids(ids, properties, secrets=st.secrets)

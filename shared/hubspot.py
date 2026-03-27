@@ -170,6 +170,90 @@ def search_contacts(
     return out
 
 
+def get_contact_lists(
+    *,
+    token: str | None = None,
+    secrets: Any = None,
+    environ: Any = None,
+    count: int = 500,
+) -> list[dict]:
+    """Fetch all HubSpot contact lists via POST /crm/v3/lists/search (offset pagination)."""
+    out: list[dict] = []
+    offset = 0
+    page_count = min(max(count, 1), 500)
+    while True:
+        data = _request_json(
+            "POST",
+            "/crm/v3/lists/search",
+            token=token,
+            secrets=secrets,
+            environ=environ,
+            json={"offset": offset, "count": page_count, "objectTypeId": "0-1", "query": ""},
+            timeout=60,
+        )
+        batch = data.get("lists", [])
+        out.extend(batch)
+        if not data.get("hasMore", False):
+            break
+        offset = data.get("offset", offset + len(batch))
+    return out
+
+
+def get_list_members(
+    list_id: str,
+    *,
+    token: str | None = None,
+    secrets: Any = None,
+    environ: Any = None,
+) -> list[str]:
+    """Fetch all member contact IDs from a HubSpot list (cursor pagination)."""
+    ids: list[str] = []
+    after: str | None = None
+    while True:
+        params: dict[str, Any] = {"limit": 100}
+        if after:
+            params["after"] = after
+        data = _request_json(
+            "GET",
+            f"/crm/v3/lists/{list_id}/memberships",
+            token=token,
+            secrets=secrets,
+            environ=environ,
+            params=params,
+            timeout=60,
+        )
+        ids.extend(str(item["recordId"]) for item in data.get("results", []))
+        after = (data.get("paging") or {}).get("next", {}).get("after")
+        if not after:
+            break
+    return ids
+
+
+def get_contacts_by_ids(
+    ids: list[str],
+    properties: list[str],
+    *,
+    token: str | None = None,
+    secrets: Any = None,
+    environ: Any = None,
+) -> list[dict]:
+    """Fetch contact records by IDs in batches of 100 via batch/read."""
+    out: list[dict] = []
+    for i in range(0, len(ids), 100):
+        chunk = ids[i:i + 100]
+        data = _request_json(
+            "POST",
+            "/crm/v3/objects/contacts/batch/read",
+            token=token,
+            secrets=secrets,
+            environ=environ,
+            json={"properties": properties, "inputs": [{"id": str(cid)} for cid in chunk]},
+            timeout=60,
+        )
+        out.extend(data.get("results", []))
+    return out
+
+
 def search_contacts_with_auto_split(
     filter_groups: list[dict],
     properties: list[str],

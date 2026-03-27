@@ -9,6 +9,8 @@ K_TEAM = "Team"
 
 ALLOWED_CATEGORIES = [K_TN, K_VIP, K_SPO, K_BEO, K_TEAM]
 
+EVENT_TAGS: list[str] = ["26DOR", "26BER", "26MUC"]
+
 def derive_kategorie_from_historie(historie: str | None, event_tag: str) -> Optional[str]:
     if not historie:
         return None
