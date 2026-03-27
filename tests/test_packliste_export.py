@@ -54,6 +54,18 @@ class PacklisteExportTests(unittest.TestCase):
             "liste_gesamt.xlsx",
         )
 
+    def test_download_filename_uses_stem_from_posix_path(self) -> None:
+        self.assertEqual(
+            download_filename("/home/user/liste_gesamt.xlsx", "dortmund"),
+            "liste_gesamt_dortmund.xlsx",
+        )
+
+    def test_download_filename_windows_path_on_linux(self) -> None:
+        self.assertEqual(
+            download_filename("C:\\Users\\admin\\packliste.xlsx", "bar"),
+            "packliste_bar.xlsx",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

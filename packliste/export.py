@@ -1,5 +1,5 @@
 from io import BytesIO
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Sequence
 
 import pandas as pd
@@ -81,5 +81,6 @@ def to_excel_bytes(
 
 
 def download_filename(pl_path: str | None, slug: str) -> str:
-    path = Path(pl_path or "packliste.xlsx")
-    return f"{path.stem}_{slug}.xlsx"
+    raw = pl_path or "packliste.xlsx"
+    stem = PureWindowsPath(raw).stem or "packliste"
+    return f"{stem}_{slug}.xlsx"
