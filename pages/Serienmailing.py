@@ -122,7 +122,7 @@ with tab_hs:
         if not lists:
             st.info("Keine HubSpot-Listen gefunden.")
         else:
-            list_options = {f"{l.get('name', l.get('listId', '?'))} ({l.get('listId', '?')})": l.get("listId") for l in lists}
+            list_options = {l.get("name") or str(l.get("listId", "?")): l.get("listId") for l in lists}
             selected_label = st.selectbox(
                 "Liste auswählen",
                 options=list(list_options.keys()),
