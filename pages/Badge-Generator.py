@@ -15,7 +15,6 @@ from badgegen.historie_options import fetch_historie_options
 from badgegen.category import derive_kategorie_from_historie, ALLOWED_CATEGORIES, EVENT_TAGS
 from badgegen.render_pdf import render_badges_pdf_bytes
 from badgegen.filter_builder import render_filter_builder
-from streamlit_searchbox import st_searchbox
 from serienmailing.imap_sender import MailConfig, create_serienmailing_drafts
 from serienmailing.mail_builder import (
     SENDER_EMAIL_SUGGESTIONS,
@@ -55,14 +54,7 @@ _BG_DEFAULT_BODY    = "anbei finden Sie Ihren persönlichen Badge für die Veran
 
 
 
-def _bg_search_senders(searchterm: str) -> list[str]:
-    term = (searchterm or "").strip().lower()
-    if not term:
-        return SENDER_EMAIL_SUGGESTIONS
-    startswith = [e for e in SENDER_EMAIL_SUGGESTIONS if e.lower().startswith(term)]
-    contains   = [e for e in SENDER_EMAIL_SUGGESTIONS if term in e.lower() and e not in startswith]
-    return startswith + contains
-
+_BG_CUSTOM_SENDER_OPTION = "Andere E-Mail-Adresse…"
 
 def _bg_load_imap_defaults() -> tuple[str, int, str, bool]:
     try:
@@ -322,17 +314,21 @@ with st.expander("Badge-Mails als Entwürfe speichern", expanded=False):
     else:
         bg_imap_host, bg_imap_port, bg_imap_folder, bg_imap_ssl = _bg_load_imap_defaults()
 
-        bg_sender = st_searchbox(
-            _bg_search_senders,
-            key="bg_sender_email",
-            label="E-Mail-Adresse (Absender)",
+        bg_sender_choice = st.selectbox(
+            "E-Mail-Adresse (Absender)",
+            options=SENDER_EMAIL_SUGGESTIONS + [_BG_CUSTOM_SENDER_OPTION],
+            index=None,
             placeholder="vorname.nachname@mysecurityevent.de",
-            default="",
-            default_use_searchterm=True,
-            default_options=SENDER_EMAIL_SUGGESTIONS,
-            edit_after_submit="option",
+            key="bg_sender_choice",
         )
-        bg_sender = bg_sender or ""
+        if bg_sender_choice == _BG_CUSTOM_SENDER_OPTION:
+            bg_sender = st.text_input(
+                "Eigene E-Mail-Adresse",
+                placeholder="vorname.nachname@mysecurityevent.de",
+                key="bg_sender_custom",
+            ) or ""
+        else:
+            bg_sender = bg_sender_choice or ""
         bg_pass = st.text_input("Passwort", type="password", key="bg_imap_pass")
 
         bg_subject = st.text_input(

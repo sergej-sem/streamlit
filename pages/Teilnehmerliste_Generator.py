@@ -161,7 +161,6 @@ if selected_name not in lists_map:
     st.stop()
 
 list_id = lists_map[selected_name]
-st.caption(f"List ID: {list_id}")
 
 # --- Verschlüsselung ---
 encrypt = st.checkbox("PDF verschlüsseln")
