@@ -6,6 +6,7 @@ from typing import Dict, List
 
 import pandas as pd
 import streamlit as st
+from streamlit_searchbox import st_searchbox
 
 from badgegen.hubspot_search import (
     P_HISTORIE,
@@ -21,6 +22,7 @@ from serienmailing.mail_builder import (
     SIGNATURE_SEVERIN_HTML,
     build_html_body,
     build_subject,
+    search_sender_emails,
 )
 from badgegen.badge_mail import build_badge_mails
 from shared.config import ConfigError, get_hubspot_token, load_imap_draft_settings
@@ -49,12 +51,8 @@ DEFAULT_TEMPLATES = {
 
 _BG_SEVERIN_ADDR  = "severin.wagner@mysecurityevent.de"
 _BG_CONFIRM_WORD  = "ENTWÜRFE"
-_BG_DEFAULT_SUBJECT = "Ihr Badge – {vorname}"
+_BG_DEFAULT_SUBJECT = "Dein Badge – {vorname}"
 _BG_DEFAULT_BODY    = "anbei finden Sie Ihren persönlichen Badge für die Veranstaltung."
-
-
-
-_BG_CUSTOM_SENDER_OPTION = "Andere E-Mail-Adresse…"
 
 def _bg_load_imap_defaults() -> tuple[str, int, str, bool]:
     try:
@@ -314,21 +312,17 @@ with st.expander("Badge-Mails als Entwürfe speichern", expanded=False):
     else:
         bg_imap_host, bg_imap_port, bg_imap_folder, bg_imap_ssl = _bg_load_imap_defaults()
 
-        bg_sender_choice = st.selectbox(
-            "E-Mail-Adresse (Absender)",
-            options=SENDER_EMAIL_SUGGESTIONS + [_BG_CUSTOM_SENDER_OPTION],
-            index=None,
+        bg_sender = st_searchbox(
+            search_sender_emails,
+            key="bg_sender_email",
+            label="E-Mail-Adresse (Absender)",
             placeholder="vorname.nachname@mysecurityevent.de",
-            key="bg_sender_choice",
+            default="",
+            default_use_searchterm=True,
+            default_options=SENDER_EMAIL_SUGGESTIONS,
+            edit_after_submit="option",
         )
-        if bg_sender_choice == _BG_CUSTOM_SENDER_OPTION:
-            bg_sender = st.text_input(
-                "Eigene E-Mail-Adresse",
-                placeholder="vorname.nachname@mysecurityevent.de",
-                key="bg_sender_custom",
-            ) or ""
-        else:
-            bg_sender = bg_sender_choice or ""
+        bg_sender = bg_sender or ""
         bg_pass = st.text_input("Passwort", type="password", key="bg_imap_pass")
 
         bg_subject = st.text_input(

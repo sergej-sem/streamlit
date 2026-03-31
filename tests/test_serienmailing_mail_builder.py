@@ -9,6 +9,7 @@ from serienmailing.mail_builder import (
     build_html_body,
     build_subject,
     html_to_plain_text,
+    search_sender_emails,
 )
 
 
@@ -119,6 +120,22 @@ class SignatureSeverinTests(unittest.TestCase):
 
     def test_contains_company(self):
         self.assertIn("mysecurityevent", SIGNATURE_SEVERIN_HTML)
+
+
+class SearchSenderEmailsTests(unittest.TestCase):
+
+    def test_empty_search_returns_default_suggestions(self):
+        result = search_sender_emails("")
+        self.assertGreater(len(result), 0)
+        self.assertEqual("severin.wagner@mysecurityevent.de", result[0])
+
+    def test_prefix_matches_rank_before_contains(self):
+        result = search_sender_emails("alex")
+        self.assertEqual("alexander.christoph@mysecurityevent.de", result[0])
+
+    def test_contains_matches_are_returned(self):
+        result = search_sender_emails("duske")
+        self.assertIn("robert.duske@mysecurityevent.de", result)
 
 
 class HtmlToPlainTextTests(unittest.TestCase):

@@ -18,6 +18,7 @@ from serienmailing.mail_builder import (
     SIGNATURE_SEVERIN_HTML,
     build_html_body,
     build_subject,
+    search_sender_emails,
 )
 from shared.config import ConfigError, load_imap_draft_settings
 
@@ -25,16 +26,6 @@ st.set_page_config(page_title="Serienmailing", layout="wide")
 
 _CONFIRM_WORD = "ENTWÜRFE"
 _SEVERIN_ADDR = "severin.wagner@mysecurityevent.de"
-
-
-
-def _search_sender_emails(searchterm: str) -> list[str]:
-    term = (searchterm or "").strip().lower()
-    if not term:
-        return SENDER_EMAIL_SUGGESTIONS
-    startswith = [e for e in SENDER_EMAIL_SUGGESTIONS if e.lower().startswith(term)]
-    contains   = [e for e in SENDER_EMAIL_SUGGESTIONS if term in e.lower() and e not in startswith]
-    return startswith + contains
 
 
 def _init_state() -> None:
@@ -78,7 +69,7 @@ imap_host, imap_port, imap_folder, imap_ssl = _load_imap_defaults()
 col_cred_a, col_cred_b = st.columns(2)
 with col_cred_a:
     imap_user = st_searchbox(
-        _search_sender_emails,
+        search_sender_emails,
         key="sm_sender_email",
         label="E-Mail-Adresse (Absender)",
         placeholder="vorname.nachname@mysecurityevent.de",

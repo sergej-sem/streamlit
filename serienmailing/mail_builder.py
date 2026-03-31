@@ -32,6 +32,17 @@ SENDER_EMAIL_SUGGESTIONS: list[str] = [
     "robert.duske@mysecurityevent.de",
 ]
 
+
+def search_sender_emails(searchterm: str) -> list[str]:
+    term = (searchterm or "").strip().lower()
+    if not term:
+        return SENDER_EMAIL_SUGGESTIONS
+
+    startswith = [email for email in SENDER_EMAIL_SUGGESTIONS if email.lower().startswith(term)]
+    contains = [email for email in SENDER_EMAIL_SUGGESTIONS if term in email.lower() and email not in startswith]
+    return startswith + contains
+
+
 SIGNATURE_SEVERIN_HTML: str = (
     '<p style="font-family:Calibri,Arial,sans-serif;font-size:11pt;margin:0;">'
     '<b><span style="color:#212121;">Severin Wagner | Operations Manager</span></b></p>'

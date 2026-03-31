@@ -223,6 +223,31 @@ def _draw_centered_lines_in_box(
         c.drawCentredString(x_center, baseline - i * line_h, ln)
 
 
+def _centered_block_edges(y0: float, y1: float, line_h: float, line_count: int) -> Tuple[float, float]:
+    box_center_y = (y0 + y1) / 2.0
+    total_h = line_count * line_h
+    return box_center_y + (total_h / 2.0), box_center_y - (total_h / 2.0)
+
+
+def _jobtitle_box_between(
+    default_box: Tuple[float, float, float, float],
+    *,
+    upper_bottom: float | None,
+    lower_top: float | None,
+) -> Tuple[float, float, float, float]:
+    if upper_bottom is None or lower_top is None:
+        return default_box
+
+    gap = upper_bottom - lower_top
+    box_height = default_box[3] - default_box[2]
+    if gap < box_height:
+        return default_box
+
+    center_y = (upper_bottom + lower_top) / 2.0
+    half_height = box_height / 2.0
+    return default_box[0], default_box[1], center_y - half_height, center_y + half_height
+
+
 def _mm_box_to_points(box_mm: Tuple[float, float, float, float]) -> Tuple[float, float, float, float]:
     x0_mm, x1_mm, y0_mm, y1_mm = box_mm
     return x0_mm * mm, x1_mm * mm, y0_mm * mm, y1_mm * mm
@@ -251,9 +276,7 @@ def render_badges_pdf_bytes(
         if cat not in template_by_category:
             raise ValueError(f"Kein Template für Kategorie: {cat}")
 
-        # Im Farbmodus: für alle Badges das Sponsoren-Template verwenden
-        tpl_key = "Sponsor" if (colored_qr and "Sponsor" in template_by_category) else cat
-        tpl = template_by_category[tpl_key]
+        tpl = template_by_category[cat]
         if not os.path.exists(tpl):
             raise FileNotFoundError(f"Template-Datei nicht gefunden: {tpl}")
 
@@ -271,25 +294,45 @@ def render_badges_pdf_bytes(
         if uppercase_company:
             company = company.upper()
 
-        # Vorname
-        x0, x1, y0, y1 = box_first
-        lines, size, lh = _fit_text_in_box(c, firstname, FONT_NAME_FIRST, FONT_SIZE_FIRST_MAX, MIN_FONT_SIZE, x1-x0, y1-y0, 2)
-        _draw_centered_lines_in_box(c, lines, FONT_NAME_FIRST, size, x0, x1, y0, y1, lh)
+        first_lines, first_size, first_lh = _fit_text_in_box(
+            c, firstname, FONT_NAME_FIRST, FONT_SIZE_FIRST_MAX, MIN_FONT_SIZE, box_first[1] - box_first[0], box_first[3] - box_first[2], 2
+        )
+        last_lines, last_size, last_lh = _fit_text_in_box(
+            c, lastname, FONT_NAME_LAST, FONT_SIZE_LAST_MAX, MIN_FONT_SIZE, box_last[1] - box_last[0], box_last[3] - box_last[2], 2
+        )
+        company_lines, company_size, company_lh = _fit_text_in_box(
+            c, company, FONT_NAME_COMPANY, FONT_SIZE_COMPANY_MAX, MIN_FONT_SIZE, box_company[1] - box_company[0], box_company[3] - box_company[2], 2
+        )
+        job_lines, job_size, job_lh = _fit_text_in_box(
+            c, jobtitle, FONT_NAME_JOB, FONT_SIZE_JOB_MAX, MIN_FONT_SIZE, box_job[1] - box_job[0], box_job[3] - box_job[2], 2
+        )
 
-        # Nachname
-        x0, x1, y0, y1 = box_last
-        lines, size, lh = _fit_text_in_box(c, lastname, FONT_NAME_LAST, FONT_SIZE_LAST_MAX, MIN_FONT_SIZE, x1-x0, y1-y0, 2)
-        _draw_centered_lines_in_box(c, lines, FONT_NAME_LAST, size, x0, x1, y0, y1, lh)
+        name_bottom = None
+        if lastname:
+            _, name_bottom = _centered_block_edges(box_last[2], box_last[3], last_lh, len(last_lines))
+        elif firstname:
+            _, name_bottom = _centered_block_edges(box_first[2], box_first[3], first_lh, len(first_lines))
 
-        # Jobtitel (direkt unter Nachname)
-        x0, x1, y0, y1 = box_job
-        lines, size, lh = _fit_text_in_box(c, jobtitle, FONT_NAME_JOB, FONT_SIZE_JOB_MAX, MIN_FONT_SIZE, x1-x0, y1-y0, 2)
-        _draw_centered_lines_in_box(c, lines, FONT_NAME_JOB, size, x0, x1, y0, y1, lh)
+        company_top = None
+        if company:
+            company_top, _ = _centered_block_edges(box_company[2], box_company[3], company_lh, len(company_lines))
 
-        # Firma (deutlich tiefer, klare Trennung vom Jobtitel)
-        x0, x1, y0, y1 = box_company
-        lines, size, lh = _fit_text_in_box(c, company, FONT_NAME_COMPANY, FONT_SIZE_COMPANY_MAX, MIN_FONT_SIZE, x1-x0, y1-y0, 2)
-        _draw_centered_lines_in_box(c, lines, FONT_NAME_COMPANY, size, x0, x1, y0, y1, lh)
+        job_box = _jobtitle_box_between(box_job, upper_bottom=name_bottom, lower_top=company_top)
+
+        _draw_centered_lines_in_box(c, first_lines, FONT_NAME_FIRST, first_size, box_first[0], box_first[1], box_first[2], box_first[3], first_lh)
+        _draw_centered_lines_in_box(c, last_lines, FONT_NAME_LAST, last_size, box_last[0], box_last[1], box_last[2], box_last[3], last_lh)
+        _draw_centered_lines_in_box(c, job_lines, FONT_NAME_JOB, job_size, job_box[0], job_box[1], job_box[2], job_box[3], job_lh)
+        _draw_centered_lines_in_box(
+            c,
+            company_lines,
+            FONT_NAME_COMPANY,
+            company_size,
+            box_company[0],
+            box_company[1],
+            box_company[2],
+            box_company[3],
+            company_lh,
+        )
 
         # QR-Code (kodiert die Datensatz-ID, falls vorhanden, sonst Name+Firma)
         qr_data = record_id or " ".join(

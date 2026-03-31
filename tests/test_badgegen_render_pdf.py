@@ -21,6 +21,7 @@ sys.path.insert(0, os.path.normpath(os.path.join(os.path.dirname(__file__), ".."
 from reportlab.pdfgen import canvas as rl_canvas
 
 from reportlab.lib import colors as rl_colors
+from reportlab.lib.utils import ImageReader
 
 from badgegen.render_pdf import (
     MIN_FONT_SIZE,
@@ -35,7 +36,9 @@ from badgegen.render_pdf import (
     TEXT_BOXES_MM,
     _QR_COLOR_BY_CATEGORY,
     _QR_COLOR_DEFAULT,
+    _centered_block_edges,
     _fit_text_in_box,
+    _jobtitle_box_between,
     _qr_color_for_category,
     _wrap_words,
     render_badges_pdf_bytes,
@@ -422,14 +425,49 @@ class QrColorForCategoryTests(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# Tests: Template-Override bei colored_qr=True (Sponsoren-Template für alle)
+# Tests: Jobtitel-Positionierung
 # ---------------------------------------------------------------------------
 
-class ColoredQrTemplateOverrideTests(unittest.TestCase):
-    """
-    Prüft, dass bei colored_qr=True das Sponsoren-Template für alle Badges
-    verwendet wird, und bei colored_qr=False das kategoriale Mapping gilt.
-    """
+class JobtitlePlacementHelperTests(unittest.TestCase):
+
+    def test_centered_block_edges_returns_symmetric_span(self):
+        top, bottom = _centered_block_edges(100.0, 160.0, 10.0, 2)
+        self.assertEqual((140.0, 120.0), (top, bottom))
+
+    def test_jobtitle_box_is_centered_between_name_and_company(self):
+        default_box = (10.0, 95.0, 79.0, 88.0)
+        centered = _jobtitle_box_between(default_box, upper_bottom=120.0, lower_top=90.0)
+
+        self.assertEqual(default_box[3] - default_box[2], centered[3] - centered[2])
+        self.assertEqual(105.0, (centered[2] + centered[3]) / 2.0)
+
+    def test_jobtitle_box_falls_back_without_name_reference(self):
+        default_box = (10.0, 95.0, 79.0, 88.0)
+        self.assertEqual(
+            default_box,
+            _jobtitle_box_between(default_box, upper_bottom=None, lower_top=90.0),
+        )
+
+    def test_jobtitle_box_falls_back_without_company_reference(self):
+        default_box = (10.0, 95.0, 79.0, 88.0)
+        self.assertEqual(
+            default_box,
+            _jobtitle_box_between(default_box, upper_bottom=120.0, lower_top=None),
+        )
+
+    def test_jobtitle_box_falls_back_when_gap_is_too_small(self):
+        default_box = (10.0, 95.0, 79.0, 88.0)
+        self.assertEqual(
+            default_box,
+            _jobtitle_box_between(default_box, upper_bottom=98.0, lower_top=90.0),
+        )
+
+
+# ---------------------------------------------------------------------------
+# Tests: Template-Auswahl bleibt kategorial, auch bei colored_qr=True
+# ---------------------------------------------------------------------------
+
+class ColoredQrTemplateSelectionTests(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
@@ -437,29 +475,29 @@ class ColoredQrTemplateOverrideTests(unittest.TestCase):
         from PIL import Image as _PilImage
 
         cls._tmpdir = tempfile.mkdtemp()
-
-        # Zwei unterschiedliche Templates: TN (blau) und Sponsor (rot) zur Unterscheidung
-        cls._tn_path = os.path.join(cls._tmpdir, "tn.png")
-        cls._spo_path = os.path.join(cls._tmpdir, "spo.png")
-
-        for path, color in [(cls._tn_path, (0, 0, 255)), (cls._spo_path, (255, 0, 0))]:
+        cls._tpl_map = {}
+        colors = {
+            "TN": (0, 0, 255),
+            "VIP/REF": (255, 255, 0),
+            "Sponsor": (255, 0, 0),
+            "BEO": (128, 0, 128),
+            "Team": (0, 128, 0),
+        }
+        for cat, color in colors.items():
+            path = os.path.join(cls._tmpdir, f"{cat.replace('/', '_')}.png")
             img = _PilImage.new("RGB", (10, 10), color=color)
             img.save(path, format="PNG")
+            cls._tpl_map[cat] = path
 
-        cls._tpl_map = {cat: cls._tn_path for cat in TEMPLATE_CATEGORIES}
-        cls._tpl_map["Sponsor"] = cls._spo_path
+    def _render_and_capture_template(self, cat: str, colored_qr: bool) -> tuple[bytes, str]:
+        original_image_reader = ImageReader
+        used_paths: list[str] = []
 
-    def _render(self, rows, colored_qr):
-        return render_badges_pdf_bytes(
-            rows=rows,
-            template_by_category=self._tpl_map,
-            uppercase_names=False,
-            uppercase_company=False,
-            colored_qr=colored_qr,
-        )
+        def tracking_image_reader(path):
+            used_paths.append(path)
+            return original_image_reader(path)
 
-    def _make_row(self, cat):
-        return {
+        row = {
             "id": "1",
             "firstname": "Max",
             "lastname": "Mustermann",
@@ -468,29 +506,29 @@ class ColoredQrTemplateOverrideTests(unittest.TestCase):
             "kategorie": cat,
         }
 
-    def test_colored_off_uses_category_template_for_tn(self):
-        """colored_qr=False: TN-Kategorie → TN-Template (kein Crash, kein Override)."""
-        result = self._render([self._make_row("TN")], colored_qr=False)
-        self.assertTrue(result.startswith(b"%PDF"))
+        with patch("badgegen.render_pdf.ImageReader", side_effect=tracking_image_reader):
+            pdf = render_badges_pdf_bytes(
+                rows=[row],
+                template_by_category=self._tpl_map,
+                uppercase_names=False,
+                uppercase_company=False,
+                colored_qr=colored_qr,
+            )
+        return pdf, used_paths[0]
 
-    def test_colored_on_uses_sponsor_template_for_tn(self):
-        """colored_qr=True: TN-Kategorie → Sponsoren-Template (kein Crash)."""
-        result = self._render([self._make_row("TN")], colored_qr=True)
-        self.assertTrue(result.startswith(b"%PDF"))
-
-    def test_colored_on_uses_sponsor_template_for_all_categories(self):
-        """colored_qr=True: alle Kategorien → Sponsoren-Template, valides PDF."""
+    def test_colored_on_keeps_category_template_for_all_categories(self):
         for cat in ["TN", "VIP/REF", "Sponsor", "BEO", "Team"]:
             with self.subTest(cat=cat):
-                result = self._render([self._make_row(cat)], colored_qr=True)
-                self.assertTrue(result.startswith(b"%PDF"), f"Kein valides PDF für {cat}")
-
-    def test_colored_off_all_categories_no_crash(self):
-        """colored_qr=False: alle Kategorien → normales Mapping, kein Crash."""
-        for cat in ["TN", "VIP/REF", "Sponsor", "BEO", "Team"]:
-            with self.subTest(cat=cat):
-                result = self._render([self._make_row(cat)], colored_qr=False)
+                result, template_path = self._render_and_capture_template(cat, colored_qr=True)
                 self.assertTrue(result.startswith(b"%PDF"))
+                self.assertEqual(self._tpl_map[cat], template_path)
+
+    def test_colored_off_keeps_category_template_for_all_categories(self):
+        for cat in ["TN", "VIP/REF", "Sponsor", "BEO", "Team"]:
+            with self.subTest(cat=cat):
+                result, template_path = self._render_and_capture_template(cat, colored_qr=False)
+                self.assertTrue(result.startswith(b"%PDF"))
+                self.assertEqual(self._tpl_map[cat], template_path)
 
 
 if __name__ == "__main__":
