@@ -1,5 +1,6 @@
 # secrets
 .streamlit/secrets.toml
+.streamlit/badge_generator_notification_settings.json
 
 # Packliste runtime files
 pages/.packliste_meta.json

@@ -22,9 +22,15 @@ from serienmailing.mail_builder import (
     build_html_body,
     build_subject,
 )
-from badgegen.badge_mail import build_badge_mails
+from badgegen.badge_mail import build_badge_mails, build_badge_notification_mails
 from shared.config import ConfigError, get_hubspot_token, load_imap_draft_settings
-from streamlit_ui import render_page_title
+from badgegen.notification_settings import (
+    BadgeNotificationSettings,
+    DEFAULT_BADGE_NOTIFICATION_RECIPIENT,
+    load_badge_notification_settings,
+    save_badge_notification_settings,
+)
+from streamlit_ui import render_email_selectbox, render_page_title
 
 st.set_page_config(page_title="Badge Generator (HubSpot)", layout="wide")
 render_page_title("Badge Generator (HubSpot)")
@@ -37,6 +43,7 @@ except ConfigError:
 
 ROOT = Path(__file__).resolve().parents[1]
 BADGES_DIR = ROOT / "assets" / "badges"
+_BG_NOTIFY_SETTINGS_PATH = ROOT / ".streamlit" / "badge_generator_notification_settings.json"
 
 DEFAULT_TEMPLATES = {
     "TN": str(BADGES_DIR / "tn.png"),
@@ -58,6 +65,28 @@ def _bg_load_imap_defaults() -> tuple[str, int, str, bool]:
         return s.host, s.port, s.drafts_folder, s.use_ssl
     except ConfigError:
         return "", 993, "Drafts", True
+
+
+def _bg_init_notification_settings() -> None:
+    if st.session_state.get("_bg_notify_settings_loaded"):
+        return
+
+    settings = load_badge_notification_settings(_BG_NOTIFY_SETTINGS_PATH)
+    st.session_state.setdefault("bg_notify_email_enabled", settings.email_enabled)
+    st.session_state.setdefault("bg_notify_sender_email", settings.sender_email)
+    st.session_state.setdefault("bg_notify_recipient_email", settings.recipient_email)
+    st.session_state["_bg_notify_settings_loaded"] = True
+
+
+def _bg_persist_notification_settings() -> None:
+    save_badge_notification_settings(
+        _BG_NOTIFY_SETTINGS_PATH,
+        BadgeNotificationSettings(
+            email_enabled=bool(st.session_state.get("bg_notify_email_enabled")),
+            sender_email=(st.session_state.get("bg_notify_sender_email") or "").strip(),
+            recipient_email=(st.session_state.get("bg_notify_recipient_email") or "").strip() or DEFAULT_BADGE_NOTIFICATION_RECIPIENT,
+        ),
+    )
 
 
 @st.cache_data(ttl=3600)
@@ -96,6 +125,7 @@ enable_autofill = True
 uppercase_names = True
 uppercase_company = True
 tpl_map = dict(DEFAULT_TEMPLATES)
+_bg_init_notification_settings()
 
 # Historie-Präfix: Dropdown oben, direkt vor den Filtern
 st.markdown("**Historie-Präfix**")
@@ -260,6 +290,7 @@ current_sig = (
 if st.session_state.get("badges_pdf_sig") != current_sig:
     st.session_state["badges_pdf_sig"] = current_sig
     st.session_state["badges_pdf_downloaded"] = False
+    st.session_state["bg_notify_result"] = None
 
 with st.spinner("PDF wird vorbereitet …"):
     try:
@@ -292,12 +323,125 @@ st.download_button(
 
 # ── Badge-Mails als Entwürfe speichern ───────────────────────────────────────
 st.session_state.setdefault("bg_draft_result", None)
+st.session_state.setdefault("bg_notify_result", None)
 
 st.divider()
 
 email_col = df_out["email"].str.strip() if "email" in df_out.columns else pd.Series([""] * len(df_out))
 n_with_email    = int((email_col != "").sum())
 n_without_email = len(df_out) - n_with_email
+n_badge_notifications = len(df_out)
+
+st.subheader("Badge-Benachrichtigung per E-Mail")
+if not st.session_state.get("badges_pdf_downloaded"):
+    st.info(
+        "Nach dem Klick auf `PDF erstellen` stehen hier E-Mail-Entwürfe für die "
+        "aktuell ausgewählten Teilnehmer zur Verfügung."
+    )
+else:
+    st.markdown(
+        f"Diese Entwürfe beziehen sich auf die aktuelle Badge-Auswahl: "
+        f"**{n_badge_notifications}** Teilnehmer-Badge(s)."
+    )
+
+    bg_notify_imap_host, bg_notify_imap_port, bg_notify_imap_folder, bg_notify_imap_ssl = _bg_load_imap_defaults()
+    bg_notify_enabled = st.checkbox(
+        "E-Mail",
+        key="bg_notify_email_enabled",
+        on_change=_bg_persist_notification_settings,
+    )
+
+    if bg_notify_enabled:
+        bg_notify_sender = render_email_selectbox(
+            "E-Mail-Adresse (Postfach / Absender)",
+            key="bg_notify_sender_email",
+            suggestions=SENDER_EMAIL_SUGGESTIONS,
+            placeholder="vorname.nachname@mysecurityevent.de",
+            on_change=_bg_persist_notification_settings,
+        )
+        bg_notify_recipient = render_email_selectbox(
+            "E-Mail-Adresse (Empfänger)",
+            key="bg_notify_recipient_email",
+            suggestions=SENDER_EMAIL_SUGGESTIONS,
+            placeholder=DEFAULT_BADGE_NOTIFICATION_RECIPIENT,
+            on_change=_bg_persist_notification_settings,
+        )
+
+        st.caption(
+            "Für jeden Badge wird ein eigener Entwurf an die konfigurierte Empfängeradresse "
+            "erzeugt. Das jeweilige Badge-PDF ist individuell angehängt."
+        )
+
+        bg_notify_pass = st.text_input("Passwort", type="password", key="bg_notify_imap_pass")
+
+        if not bg_notify_imap_host:
+            st.warning("IMAP-Draft-Konfiguration fehlt. Bitte `mse_imap_mail_drafts` in den Secrets prüfen.")
+
+        bg_notify_ready = (
+            n_badge_notifications > 0
+            and bool(bg_notify_imap_host)
+            and bool(bg_notify_sender)
+            and bool(bg_notify_recipient)
+            and bool(bg_notify_pass)
+        )
+
+        if st.button("E-Mail-Entwürfe erzeugen", disabled=not bg_notify_ready, type="primary", key="bg_notify_btn"):
+            with st.spinner(f"Erstelle {n_badge_notifications} Benachrichtigungs-Entwurf/Entwürfe …"):
+                try:
+                    mails, skipped = build_badge_notification_mails(
+                        df_out=df_out,
+                        recipient_email=bg_notify_recipient,
+                        tpl_map=tpl_map,
+                        uppercase_names=uppercase_names,
+                        uppercase_company=uppercase_company,
+                        colored_qr=colored_qr,
+                    )
+                    if mails:
+                        config = MailConfig(
+                            host=bg_notify_imap_host,
+                            port=bg_notify_imap_port,
+                            username=bg_notify_sender,
+                            password=bg_notify_pass,
+                            drafts_folder=bg_notify_imap_folder or "Drafts",
+                            use_ssl=bg_notify_imap_ssl,
+                        )
+                        results = create_serienmailing_drafts(mails, config)
+                    else:
+                        results = []
+                    st.session_state["bg_notify_result"] = {"results": results, "skipped": skipped}
+                except Exception as exc:
+                    st.error(str(exc))
+
+    bg_notify_result = st.session_state.get("bg_notify_result")
+    if bg_notify_result is not None:
+        bg_notify_results = bg_notify_result.get("results", [])
+        bg_notify_skipped = bg_notify_result.get("skipped", [])
+
+        ok = sum(1 for r in bg_notify_results if r.status == "draft_created")
+        err = len(bg_notify_results) - ok
+
+        if bg_notify_results:
+            st.success(f"{ok} Benachrichtigungs-Entwurf/Entwürfe gespeichert." + (f"  {err} Fehler." if err else ""))
+            notify_rows = [
+                {
+                    "Teilnehmer": r.vorname,
+                    "Firma": r.firma,
+                    "Empfänger": r.to_email,
+                    "Status": r.details if r.status == "error" and r.details else "Entwurf gespeichert",
+                }
+                for r in bg_notify_results
+            ]
+            st.dataframe(pd.DataFrame(notify_rows), use_container_width=True, hide_index=True)
+
+        if bg_notify_skipped:
+            st.warning(f"{len(bg_notify_skipped)} Person(en) übersprungen:")
+            skip_rows = [
+                {"Teilnehmer": s["name"], "Empfänger": s["email"], "Grund": s["reason"]}
+                for s in bg_notify_skipped
+            ]
+            st.dataframe(pd.DataFrame(skip_rows), use_container_width=True, hide_index=True)
+
+st.divider()
 
 with st.expander("Badge-Mails als Entwürfe speichern", expanded=False):
     st.markdown(
@@ -310,28 +454,12 @@ with st.expander("Badge-Mails als Entwürfe speichern", expanded=False):
     else:
         bg_imap_host, bg_imap_port, bg_imap_folder, bg_imap_ssl = _bg_load_imap_defaults()
 
-        bg_sender_state = st.session_state.get("bg_sender_email")
-        if isinstance(bg_sender_state, dict):
-            st.session_state["bg_sender_email"] = (
-                bg_sender_state.get("result")
-                or bg_sender_state.get("search")
-                or ""
-            )
-
-        bg_sender_value = (st.session_state.get("bg_sender_email") or "").strip()
-        bg_sender_options = list(SENDER_EMAIL_SUGGESTIONS)
-        if bg_sender_value and bg_sender_value not in bg_sender_options:
-            bg_sender_options.insert(0, bg_sender_value)
-
-        bg_sender = st.selectbox(
+        bg_sender = render_email_selectbox(
             "E-Mail-Adresse (Absender)",
-            options=bg_sender_options,
-            index=None,
             key="bg_sender_email",
+            suggestions=SENDER_EMAIL_SUGGESTIONS,
             placeholder="vorname.nachname@mysecurityevent.de",
-            accept_new_options=True,
         )
-        bg_sender = (bg_sender or "").strip()
         bg_pass = st.text_input("Passwort", type="password", key="bg_imap_pass")
 
         bg_subject = st.text_input(

@@ -6,11 +6,12 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from serienmailing.mail_builder import (
     SIGNATURE_SEVERIN_HTML,
+    SENDER_EMAIL_SUGGESTIONS,
     build_html_body,
     build_subject,
     html_to_plain_text,
-    search_sender_emails,
 )
+from shared.email_input import build_email_select_options, normalize_email_widget_value
 
 
 class BuildHtmlBodyTests(unittest.TestCase):
@@ -122,20 +123,32 @@ class SignatureSeverinTests(unittest.TestCase):
         self.assertIn("mysecurityevent", SIGNATURE_SEVERIN_HTML)
 
 
-class SearchSenderEmailsTests(unittest.TestCase):
+class EmailInputHelperTests(unittest.TestCase):
 
-    def test_empty_search_returns_default_suggestions(self):
-        result = search_sender_emails("")
-        self.assertGreater(len(result), 0)
-        self.assertEqual("severin.wagner@mysecurityevent.de", result[0])
+    def test_normalize_plain_string_strips_whitespace(self):
+        self.assertEqual("custom@example.com", normalize_email_widget_value("  custom@example.com  "))
 
-    def test_prefix_matches_rank_before_contains(self):
-        result = search_sender_emails("alex")
-        self.assertEqual("alexander.christoph@mysecurityevent.de", result[0])
+    def test_normalize_legacy_searchbox_dict_prefers_result(self):
+        raw = {"result": "picked@example.com", "search": "typed@example.com"}
+        self.assertEqual("picked@example.com", normalize_email_widget_value(raw))
 
-    def test_contains_matches_are_returned(self):
-        result = search_sender_emails("duske")
-        self.assertIn("robert.duske@mysecurityevent.de", result)
+    def test_normalize_legacy_searchbox_dict_falls_back_to_search(self):
+        raw = {"result": "", "search": "typed@example.com"}
+        self.assertEqual("typed@example.com", normalize_email_widget_value(raw))
+
+    def test_empty_state_keeps_original_suggestions(self):
+        result = build_email_select_options(SENDER_EMAIL_SUGGESTIONS, "")
+        self.assertEqual(SENDER_EMAIL_SUGGESTIONS, result)
+
+    def test_custom_email_is_added_first(self):
+        result = build_email_select_options(SENDER_EMAIL_SUGGESTIONS, "custom@example.com")
+        self.assertEqual("custom@example.com", result[0])
+        self.assertIn("severin.wagner@mysecurityevent.de", result)
+
+    def test_existing_suggestion_is_not_duplicated_case_insensitively(self):
+        result = build_email_select_options(SENDER_EMAIL_SUGGESTIONS, "Severin.Wagner@mysecurityevent.de")
+        lowered = [item.lower() for item in result]
+        self.assertEqual(1, lowered.count("severin.wagner@mysecurityevent.de"))
 
 
 class HtmlToPlainTextTests(unittest.TestCase):

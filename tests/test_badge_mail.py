@@ -8,7 +8,11 @@ sys.path.insert(0, os.path.normpath(os.path.join(os.path.dirname(__file__), ".."
 import pandas as pd
 from PIL import Image as _PilImage
 
-from badgegen.badge_mail import build_badge_mails, _safe_filename
+from badgegen.badge_mail import (
+    _safe_filename,
+    build_badge_mails,
+    build_badge_notification_mails,
+)
 from badgegen.category import ALLOWED_CATEGORIES
 
 
@@ -148,6 +152,47 @@ class BuildBadgeMailsTests(unittest.TestCase):
         mails, skipped = build_badge_mails(df, "S", "B", "", self._tpl_map)
         self.assertEqual(mails, [])
         self.assertEqual(skipped, [])
+
+
+class BuildBadgeNotificationMailsTests(unittest.TestCase):
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmpdir = tempfile.mkdtemp()
+        cls._tpl_map = _make_tpl_map(cls._tmpdir)
+
+    def _df(self, rows: list[dict]) -> pd.DataFrame:
+        return pd.DataFrame(rows)
+
+    def test_notification_subject_contains_full_name(self):
+        df = self._df([_row(firstname="Eva", lastname="Schmidt")])
+        mails, skipped = build_badge_notification_mails(df, "notify@example.com", self._tpl_map)
+        self.assertEqual(len(skipped), 0)
+        self.assertEqual(mails[0].subject, "Neues Badge erstellt für: Eva Schmidt")
+
+    def test_notification_attachment_bytes_is_pdf(self):
+        df = self._df([_row()])
+        mails, _ = build_badge_notification_mails(df, "notify@example.com", self._tpl_map)
+        self.assertTrue(mails[0].attachment_bytes.startswith(b"%PDF"))
+
+    def test_notification_uses_configured_recipient(self):
+        df = self._df([_row(email="participant@example.com")])
+        mails, _ = build_badge_notification_mails(df, "notify@example.com", self._tpl_map)
+        self.assertEqual("notify@example.com", mails[0].to_email)
+
+    def test_notification_does_not_require_participant_email(self):
+        df = self._df([_row(email="")])
+        mails, skipped = build_badge_notification_mails(df, "notify@example.com", self._tpl_map)
+        self.assertEqual(len(skipped), 0)
+        self.assertEqual(1, len(mails))
+        self.assertEqual("notify@example.com", mails[0].to_email)
+
+    def test_notification_skips_unknown_category(self):
+        df = self._df([_row(kategorie="UNBEKANNT")])
+        mails, skipped = build_badge_notification_mails(df, "notify@example.com", self._tpl_map)
+        self.assertEqual(mails, [])
+        self.assertEqual(len(skipped), 1)
+        self.assertIn("UNBEKANNT", skipped[0]["reason"])
 
 
 if __name__ == "__main__":

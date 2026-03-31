@@ -3,8 +3,6 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
-from streamlit_searchbox import st_searchbox
-
 from serienmailing.contacts import (
     COLS,
     contacts_from_excel,
@@ -18,9 +16,9 @@ from serienmailing.mail_builder import (
     SIGNATURE_SEVERIN_HTML,
     build_html_body,
     build_subject,
-    search_sender_emails,
 )
 from shared.config import ConfigError, load_imap_draft_settings
+from streamlit_ui import render_email_selectbox
 
 st.set_page_config(page_title="Serienmailing", layout="wide")
 
@@ -68,17 +66,12 @@ imap_host, imap_port, imap_folder, imap_ssl = _load_imap_defaults()
 
 col_cred_a, col_cred_b = st.columns(2)
 with col_cred_a:
-    imap_user = st_searchbox(
-        search_sender_emails,
+    imap_user = render_email_selectbox(
+        "E-Mail-Adresse (Absender)",
         key="sm_sender_email",
-        label="E-Mail-Adresse (Absender)",
+        suggestions=SENDER_EMAIL_SUGGESTIONS,
         placeholder="vorname.nachname@mysecurityevent.de",
-        default="",
-        default_use_searchterm=True,
-        default_options=SENDER_EMAIL_SUGGESTIONS,
-        edit_after_submit="option",
     )
-    imap_user = imap_user or ""
 with col_cred_b:
     imap_pass = st.text_input("Passwort", type="password")
 

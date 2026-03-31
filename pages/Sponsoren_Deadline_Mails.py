@@ -7,7 +7,6 @@ from uuid import uuid4
 import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
-from streamlit_searchbox import st_searchbox
 
 from shared.config import ConfigError, load_imap_draft_settings
 
@@ -48,7 +47,7 @@ from sponsor_deadline_mails.summary_state import (
     make_summary_callback,
     selected_mail_numbers as get_selected_mail_numbers,
 )
-from streamlit_ui import render_page_title
+from streamlit_ui import render_email_selectbox, render_page_title
 
 
 st.set_page_config(page_title="Deadline-E-Mails für Sponsoren", layout="wide")
@@ -97,23 +96,6 @@ def _cached_sheet_names(excel_bytes: bytes) -> list[str]:
 def _make_file_token(file_name: str, excel_bytes: bytes) -> str:
     digest = hashlib.sha1(excel_bytes).hexdigest()
     return f"{file_name}:{len(excel_bytes)}:{digest}"
-
-
-def _search_sender_emails(searchterm: str) -> list[str]:
-    term = (searchterm or "").strip().lower()
-    if not term:
-        return SENDER_EMAIL_SUGGESTIONS
-
-    startswith_matches = [
-        email for email in SENDER_EMAIL_SUGGESTIONS
-        if email.lower().startswith(term)
-    ]
-    contains_matches = [
-        email for email in SENDER_EMAIL_SUGGESTIONS
-        if term in email.lower() and email not in startswith_matches
-    ]
-    return startswith_matches + contains_matches
-
 
 def _load_base_imap_config() -> ImapDraftConfig | None:
     try:
@@ -215,19 +197,13 @@ with date_col:
     event_end = st.date_input("Event-Ende", value=DEFAULT_EVENT_END)
 
 with imap_col:
-    imap_username = st_searchbox(
-        _search_sender_emails,
+    imap_username = render_email_selectbox(
+        "E-Mail-Adresse",
         help="Mit dieser Adresse werden die Entwürfe in Deinem Postfach gespeichert.",
         key="sdm_sender_email",
-        label="E-Mail-Adresse",
+        suggestions=SENDER_EMAIL_SUGGESTIONS,
         placeholder="vorname.nachname@mysecurityevent.de",
-        default="",
-        default_use_searchterm=True,
-        default_options=SENDER_EMAIL_SUGGESTIONS,
-        edit_after_submit="option",
     )
-    if imap_username is None:
-        imap_username = ""
     imap_password = st.text_input(
         "E-Mail-Passwort",
         type="password",
