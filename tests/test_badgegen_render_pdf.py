@@ -199,6 +199,24 @@ class FitTextInBoxTests(unittest.TestCase):
         self.assertLessEqual(len(lines), 3)
         self.assertFalse(any("…" in ln for ln in lines))
 
+    def test_long_jobtitle_can_use_three_lines_at_min_font_without_ellipsis(self):
+        x0, x1, y0_mm, y1_mm = TEXT_BOXES_MM["jobtitle"]
+        box_w = ((x1 - x0) * mm) - 50
+        box_h = (y1_mm - y0_mm) * mm
+        lines, size, _ = _fit_text_in_box(
+            self.c,
+            "Senior Vice President International Business Development and Strategic Partnerships and Alliances",
+            FONT_NAME_JOB,
+            FONT_SIZE_JOB_MAX,
+            MIN_FONT_SIZE_JOB,
+            box_w,
+            box_h,
+            3,
+        )
+        self.assertEqual(size, MIN_FONT_SIZE_JOB)
+        self.assertLessEqual(len(lines), 3)
+        self.assertFalse(any("…" in ln for ln in lines))
+
     # --- Max-Lines-Constraint: nie mehr als max_lines Zeilen ---
 
     def test_max_lines_respected(self):
