@@ -18,6 +18,7 @@ from unittest.mock import patch
 # Projekt-Root ins sys.path eintragen (tests/ liegt eine Ebene unter Root)
 sys.path.insert(0, os.path.normpath(os.path.join(os.path.dirname(__file__), "..")))
 
+import badgegen.render_pdf as render_pdf_module
 from reportlab.pdfgen import canvas as rl_canvas
 
 from reportlab.lib import colors as rl_colors
@@ -25,6 +26,7 @@ from reportlab.lib.utils import ImageReader
 
 from badgegen.render_pdf import (
     MIN_FONT_SIZE,
+    MIN_FONT_SIZE_JOB,
     FONT_NAME_FIRST,
     FONT_NAME_LAST,
     FONT_NAME_COMPANY,
@@ -39,6 +41,7 @@ from badgegen.render_pdf import (
     _centered_block_edges,
     _fit_text_in_box,
     _jobtitle_box_between,
+    _mm_box_to_points,
     _qr_color_for_category,
     _wrap_words,
     render_badges_pdf_bytes,
@@ -142,6 +145,59 @@ class FitTextInBoxTests(unittest.TestCase):
             self.box_w, self.box_h, 2
         )
         self.assertGreaterEqual(size, MIN_FONT_SIZE)
+
+    def test_hyphenated_lastname_fits_without_ellipsis(self):
+        x0, x1, y0_mm, y1_mm = TEXT_BOXES_MM["lastname"]
+        box_w = (x1 - x0) * mm
+        box_h = (y1_mm - y0_mm) * mm
+        lines, size, _ = _fit_text_in_box(
+            self.c,
+            "Freiherr von Muenchhausen-Wolfsberg-Hohenried-Altenburg",
+            FONT_NAME_LAST,
+            FONT_SIZE_LAST_MAX,
+            MIN_FONT_SIZE,
+            box_w,
+            box_h,
+            2,
+        )
+        self.assertGreaterEqual(size, MIN_FONT_SIZE)
+        self.assertFalse(any("…" in ln for ln in lines))
+
+    def test_long_company_can_use_three_lines_without_ellipsis(self):
+        x0, x1, y0_mm, y1_mm = TEXT_BOXES_MM["company"]
+        box_w = (x1 - x0) * mm
+        box_h = (y1_mm - y0_mm) * mm
+        lines, size, _ = _fit_text_in_box(
+            self.c,
+            "Internationale Gesellschaft fuer Unternehmensberatung und Strategieentwicklung GmbH & Co. KG",
+            FONT_NAME_COMPANY,
+            FONT_SIZE_COMPANY_MAX,
+            MIN_FONT_SIZE,
+            box_w,
+            box_h,
+            3,
+        )
+        self.assertGreaterEqual(size, MIN_FONT_SIZE)
+        self.assertLessEqual(len(lines), 3)
+        self.assertFalse(any("…" in ln for ln in lines))
+
+    def test_long_jobtitle_can_use_smaller_font_and_no_ellipsis(self):
+        x0, x1, y0_mm, y1_mm = TEXT_BOXES_MM["jobtitle"]
+        box_w = (x1 - x0) * mm
+        box_h = (y1_mm - y0_mm) * mm
+        lines, size, _ = _fit_text_in_box(
+            self.c,
+            "Senior Vice President International Business Development and Strategic Partnerships and Alliances",
+            FONT_NAME_JOB,
+            FONT_SIZE_JOB_MAX,
+            MIN_FONT_SIZE_JOB,
+            box_w,
+            box_h,
+            3,
+        )
+        self.assertGreaterEqual(size, MIN_FONT_SIZE_JOB)
+        self.assertLessEqual(len(lines), 3)
+        self.assertFalse(any("…" in ln for ln in lines))
 
     # --- Max-Lines-Constraint: nie mehr als max_lines Zeilen ---
 
@@ -434,12 +490,11 @@ class JobtitlePlacementHelperTests(unittest.TestCase):
         top, bottom = _centered_block_edges(100.0, 160.0, 10.0, 2)
         self.assertEqual((140.0, 120.0), (top, bottom))
 
-    def test_jobtitle_box_is_centered_between_name_and_company(self):
+    def test_jobtitle_box_uses_actual_gap_between_name_and_company(self):
         default_box = (10.0, 95.0, 79.0, 88.0)
         centered = _jobtitle_box_between(default_box, upper_bottom=120.0, lower_top=90.0)
 
-        self.assertEqual(default_box[3] - default_box[2], centered[3] - centered[2])
-        self.assertEqual(105.0, (centered[2] + centered[3]) / 2.0)
+        self.assertEqual((10.0, 95.0, 90.0, 120.0), centered)
 
     def test_jobtitle_box_falls_back_without_name_reference(self):
         default_box = (10.0, 95.0, 79.0, 88.0)
@@ -455,12 +510,89 @@ class JobtitlePlacementHelperTests(unittest.TestCase):
             _jobtitle_box_between(default_box, upper_bottom=120.0, lower_top=None),
         )
 
-    def test_jobtitle_box_falls_back_when_gap_is_too_small(self):
+    def test_jobtitle_box_falls_back_when_blocks_overlap(self):
         default_box = (10.0, 95.0, 79.0, 88.0)
         self.assertEqual(
             default_box,
-            _jobtitle_box_between(default_box, upper_bottom=98.0, lower_top=90.0),
+            _jobtitle_box_between(default_box, upper_bottom=90.0, lower_top=90.0),
         )
+
+
+class RenderedJobtitlePlacementTests(unittest.TestCase):
+
+    @classmethod
+    def setUpClass(cls):
+        import tempfile
+        from PIL import Image as _PilImage
+
+        cls._tmpdir = tempfile.mkdtemp()
+        cls._tpl_path = os.path.join(cls._tmpdir, "dummy.png")
+
+        img = _PilImage.new("RGB", (10, 10), color=(255, 255, 255))
+        img.save(cls._tpl_path, format="PNG")
+        cls._tpl_map = {cat: cls._tpl_path for cat in TEMPLATE_CATEGORIES}
+
+    def _capture_draw_calls(self, row: dict) -> list[dict]:
+        original_draw = render_pdf_module._draw_centered_lines_in_box
+        draw_calls: list[dict] = []
+
+        def tracking_draw(*args, **kwargs):
+            draw_calls.append({
+                "lines": list(args[1]),
+                "box": (args[4], args[5], args[6], args[7]),
+                "line_h": args[8],
+            })
+            return original_draw(*args, **kwargs)
+
+        with patch("badgegen.render_pdf._draw_centered_lines_in_box", side_effect=tracking_draw):
+            render_badges_pdf_bytes(
+                rows=[row],
+                template_by_category=self._tpl_map,
+                uppercase_names=False,
+                uppercase_company=False,
+                colored_qr=False,
+            )
+
+        return draw_calls
+
+    def test_jobtitle_uses_dynamic_gap_box_when_name_and_company_exist(self):
+        row = {
+            "id": "1",
+            "firstname": "Maximilian Alexander",
+            "lastname": "von Hohenstein-Falkenried",
+            "jobtitle": "Security Architect",
+            "company": "International Cyber Security Solutions Group",
+            "kategorie": "TN",
+        }
+
+        draw_calls = self._capture_draw_calls(row)
+        job_call = draw_calls[2]
+        last_call = draw_calls[1]
+        company_call = draw_calls[3]
+        static_job_box = _mm_box_to_points(TEXT_BOXES_MM["jobtitle"])
+
+        _, name_bottom = _centered_block_edges(last_call["box"][2], last_call["box"][3], last_call["line_h"], len(last_call["lines"]))
+        company_top, _ = _centered_block_edges(company_call["box"][2], company_call["box"][3], company_call["line_h"], len(company_call["lines"]))
+        expected_box = _jobtitle_box_between(static_job_box, upper_bottom=name_bottom, lower_top=company_top)
+
+        self.assertEqual(expected_box, job_call["box"])
+        self.assertNotEqual(static_job_box, job_call["box"])
+
+    def test_jobtitle_falls_back_to_static_box_without_company(self):
+        row = {
+            "id": "1",
+            "firstname": "Max",
+            "lastname": "Mustermann",
+            "jobtitle": "Security Architect",
+            "company": "",
+            "kategorie": "TN",
+        }
+
+        draw_calls = self._capture_draw_calls(row)
+        job_call = draw_calls[2]
+        static_job_box = _mm_box_to_points(TEXT_BOXES_MM["jobtitle"])
+
+        self.assertEqual(static_job_box, job_call["box"])
 
 
 # ---------------------------------------------------------------------------

@@ -1,6 +1,7 @@
 # badgegen/render_pdf.py
 
 import os
+import re
 from io import BytesIO
 from typing import Dict, Any, List, Tuple
 
@@ -128,24 +129,54 @@ FONT_SIZE_LAST_MAX    = 48
 FONT_SIZE_COMPANY_MAX = 40
 FONT_SIZE_JOB_MAX     = 30
 
-MIN_FONT_SIZE = 12
+MIN_FONT_SIZE = 10
+MIN_FONT_SIZE_JOB = 9
+
+MAX_LINES_FIRST = 2
+MAX_LINES_LAST = 2
+MAX_LINES_COMPANY = 3
+MAX_LINES_JOB = 3
+
+
+def _wrap_segments(text: str) -> List[Tuple[str, bool]]:
+    segments: List[Tuple[str, bool]] = []
+    for word in text.split():
+        parts = re.split(r"(-)", word)
+        first_segment = True
+        current = ""
+
+        for part in parts:
+            if not part:
+                continue
+            current += part
+            if part == "-":
+                segments.append((current, first_segment))
+                current = ""
+                first_segment = False
+
+        if current:
+            segments.append((current, first_segment))
+
+    return segments
 
 
 def _wrap_words(c: canvas.Canvas, text: str, font: str, size: int, max_width: float) -> List[str]:
     if not text:
         return [""]
-    words = text.split()
+    segments = _wrap_segments(text)
+    if not segments:
+        return [text]
     lines: List[str] = []
     current = ""
     c.setFont(font, size)
-    for w in words:
-        test = (current + " " + w).strip()
+    for segment, add_space in segments:
+        test = current + ((" " + segment) if (current and add_space) else segment)
         if c.stringWidth(test, font, size) <= max_width:
             current = test
         else:
             if current:
                 lines.append(current)
-            current = w
+            current = segment
     if current:
         lines.append(current)
     return lines
@@ -187,11 +218,14 @@ def _fit_text_in_box(
     size = min_size
     c.setFont(font, size)
     line_h = _text_height(font, size)
+    max_lines_by_height = max(1, int(max_height // line_h)) if line_h > 0 else 1
+    effective_max_lines = min(max_lines, max_lines_by_height)
 
-    lines = _wrap_words(c, text, font, size, max_width)
-    if len(lines) > max_lines:
-        lines = lines[:max_lines]
-    if lines:
+    wrapped_lines = _wrap_words(c, text, font, size, max_width)
+    truncated = len(wrapped_lines) > effective_max_lines
+    lines = wrapped_lines[:effective_max_lines]
+    needs_ellipsis = truncated or any(c.stringWidth(ln, font, size) > max_width for ln in lines)
+    if lines and needs_ellipsis:
         last = lines[-1]
         while last and c.stringWidth(last + "…", font, size) > max_width:
             last = last[:-1]
@@ -238,14 +272,10 @@ def _jobtitle_box_between(
     if upper_bottom is None or lower_top is None:
         return default_box
 
-    gap = upper_bottom - lower_top
-    box_height = default_box[3] - default_box[2]
-    if gap < box_height:
+    if upper_bottom <= lower_top:
         return default_box
 
-    center_y = (upper_bottom + lower_top) / 2.0
-    half_height = box_height / 2.0
-    return default_box[0], default_box[1], center_y - half_height, center_y + half_height
+    return default_box[0], default_box[1], lower_top, upper_bottom
 
 
 def _mm_box_to_points(box_mm: Tuple[float, float, float, float]) -> Tuple[float, float, float, float]:
@@ -295,16 +325,13 @@ def render_badges_pdf_bytes(
             company = company.upper()
 
         first_lines, first_size, first_lh = _fit_text_in_box(
-            c, firstname, FONT_NAME_FIRST, FONT_SIZE_FIRST_MAX, MIN_FONT_SIZE, box_first[1] - box_first[0], box_first[3] - box_first[2], 2
+            c, firstname, FONT_NAME_FIRST, FONT_SIZE_FIRST_MAX, MIN_FONT_SIZE, box_first[1] - box_first[0], box_first[3] - box_first[2], MAX_LINES_FIRST
         )
         last_lines, last_size, last_lh = _fit_text_in_box(
-            c, lastname, FONT_NAME_LAST, FONT_SIZE_LAST_MAX, MIN_FONT_SIZE, box_last[1] - box_last[0], box_last[3] - box_last[2], 2
+            c, lastname, FONT_NAME_LAST, FONT_SIZE_LAST_MAX, MIN_FONT_SIZE, box_last[1] - box_last[0], box_last[3] - box_last[2], MAX_LINES_LAST
         )
         company_lines, company_size, company_lh = _fit_text_in_box(
-            c, company, FONT_NAME_COMPANY, FONT_SIZE_COMPANY_MAX, MIN_FONT_SIZE, box_company[1] - box_company[0], box_company[3] - box_company[2], 2
-        )
-        job_lines, job_size, job_lh = _fit_text_in_box(
-            c, jobtitle, FONT_NAME_JOB, FONT_SIZE_JOB_MAX, MIN_FONT_SIZE, box_job[1] - box_job[0], box_job[3] - box_job[2], 2
+            c, company, FONT_NAME_COMPANY, FONT_SIZE_COMPANY_MAX, MIN_FONT_SIZE, box_company[1] - box_company[0], box_company[3] - box_company[2], MAX_LINES_COMPANY
         )
 
         name_bottom = None
@@ -318,6 +345,16 @@ def render_badges_pdf_bytes(
             company_top, _ = _centered_block_edges(box_company[2], box_company[3], company_lh, len(company_lines))
 
         job_box = _jobtitle_box_between(box_job, upper_bottom=name_bottom, lower_top=company_top)
+        job_lines, job_size, job_lh = _fit_text_in_box(
+            c,
+            jobtitle,
+            FONT_NAME_JOB,
+            FONT_SIZE_JOB_MAX,
+            MIN_FONT_SIZE_JOB,
+            job_box[1] - job_box[0],
+            job_box[3] - job_box[2],
+            MAX_LINES_JOB,
+        )
 
         _draw_centered_lines_in_box(c, first_lines, FONT_NAME_FIRST, first_size, box_first[0], box_first[1], box_first[2], box_first[3], first_lh)
         _draw_centered_lines_in_box(c, last_lines, FONT_NAME_LAST, last_size, box_last[0], box_last[1], box_last[2], box_last[3], last_lh)

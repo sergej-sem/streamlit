@@ -6,7 +6,6 @@ from typing import Dict, List
 
 import pandas as pd
 import streamlit as st
-from streamlit_searchbox import st_searchbox
 
 from badgegen.hubspot_search import (
     P_HISTORIE,
@@ -22,7 +21,6 @@ from serienmailing.mail_builder import (
     SIGNATURE_SEVERIN_HTML,
     build_html_body,
     build_subject,
-    search_sender_emails,
 )
 from badgegen.badge_mail import build_badge_mails
 from shared.config import ConfigError, get_hubspot_token, load_imap_draft_settings
@@ -312,17 +310,28 @@ with st.expander("Badge-Mails als Entwürfe speichern", expanded=False):
     else:
         bg_imap_host, bg_imap_port, bg_imap_folder, bg_imap_ssl = _bg_load_imap_defaults()
 
-        bg_sender = st_searchbox(
-            search_sender_emails,
+        bg_sender_state = st.session_state.get("bg_sender_email")
+        if isinstance(bg_sender_state, dict):
+            st.session_state["bg_sender_email"] = (
+                bg_sender_state.get("result")
+                or bg_sender_state.get("search")
+                or ""
+            )
+
+        bg_sender_value = (st.session_state.get("bg_sender_email") or "").strip()
+        bg_sender_options = list(SENDER_EMAIL_SUGGESTIONS)
+        if bg_sender_value and bg_sender_value not in bg_sender_options:
+            bg_sender_options.insert(0, bg_sender_value)
+
+        bg_sender = st.selectbox(
+            "E-Mail-Adresse (Absender)",
+            options=bg_sender_options,
+            index=None,
             key="bg_sender_email",
-            label="E-Mail-Adresse (Absender)",
             placeholder="vorname.nachname@mysecurityevent.de",
-            default="",
-            default_use_searchterm=True,
-            default_options=SENDER_EMAIL_SUGGESTIONS,
-            edit_after_submit="option",
+            accept_new_options=True,
         )
-        bg_sender = bg_sender or ""
+        bg_sender = (bg_sender or "").strip()
         bg_pass = st.text_input("Passwort", type="password", key="bg_imap_pass")
 
         bg_subject = st.text_input(
