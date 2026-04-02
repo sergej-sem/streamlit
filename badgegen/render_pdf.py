@@ -137,6 +137,11 @@ MAX_LINES_LAST = 2
 MAX_LINES_COMPANY = 3
 MAX_LINES_JOB = 3
 
+JOBTITLE_GAP_TARGET_MM = 5.0
+JOBTITLE_GAP_MIN_MM = 3.5
+JOBTITLE_GAP_TARGET = JOBTITLE_GAP_TARGET_MM * mm
+JOBTITLE_GAP_MIN = JOBTITLE_GAP_MIN_MM * mm
+
 
 def _wrap_segments(text: str) -> List[Tuple[str, bool]]:
     segments: List[Tuple[str, bool]] = []
@@ -189,7 +194,7 @@ def _text_height(font: str, size: int) -> float:
     return glyph_h * 1.05
 
 
-def _fit_text_in_box(
+def _fit_text_in_box_details(
     c: canvas.Canvas,
     text: str,
     font: str,
@@ -198,10 +203,11 @@ def _fit_text_in_box(
     max_width: float,
     max_height: float,
     max_lines: int,
-) -> Tuple[List[str], int, float]:
+) -> Tuple[List[str], int, float, bool]:
     text = (text or "").strip()
     if not text:
-        return [""], max_size, _text_height(font, max_size)
+        line_h = _text_height(font, max_size)
+        return [""], max_size, line_h, True
 
     for size in range(max_size, min_size - 1, -1):
         lines = _wrap_words(c, text, font, size, max_width)
@@ -212,7 +218,7 @@ def _fit_text_in_box(
             continue
         line_h = _text_height(font, size)
         if len(lines) * line_h <= max_height:
-            return lines, size, line_h
+            return lines, size, line_h, True
 
     # Notfall: min_size + Ellipsis
     size = min_size
@@ -230,6 +236,23 @@ def _fit_text_in_box(
         while last and c.stringWidth(last + "…", font, size) > max_width:
             last = last[:-1]
         lines[-1] = (last + "…") if last else "…"
+    fits_without_truncation = (not needs_ellipsis) and (len(lines) * line_h <= max_height)
+    return lines, size, line_h, fits_without_truncation
+
+
+def _fit_text_in_box(
+    c: canvas.Canvas,
+    text: str,
+    font: str,
+    max_size: int,
+    min_size: int,
+    max_width: float,
+    max_height: float,
+    max_lines: int,
+) -> Tuple[List[str], int, float]:
+    lines, size, line_h, _ = _fit_text_in_box_details(
+        c, text, font, max_size, min_size, max_width, max_height, max_lines
+    )
     return lines, size, line_h
 
 
@@ -276,6 +299,27 @@ def _jobtitle_box_between(
         return default_box
 
     return default_box[0], default_box[1], lower_top, upper_bottom
+
+
+def _jobtitle_box_with_gap(
+    default_box: Tuple[float, float, float, float],
+    *,
+    upper_bottom: float | None,
+    lower_top: float | None,
+    gap: float,
+) -> Tuple[float, float, float, float] | None:
+    if upper_bottom is None or lower_top is None:
+        return None
+
+    if upper_bottom <= lower_top:
+        return None
+
+    y0 = lower_top + gap
+    y1 = upper_bottom - gap
+    if y1 <= y0:
+        return None
+
+    return default_box[0], default_box[1], y0, y1
 
 
 def _mm_box_to_points(box_mm: Tuple[float, float, float, float]) -> Tuple[float, float, float, float]:
@@ -344,17 +388,59 @@ def render_badges_pdf_bytes(
         if company:
             company_top, _ = _centered_block_edges(box_company[2], box_company[3], company_lh, len(company_lines))
 
-        job_box = _jobtitle_box_between(box_job, upper_bottom=name_bottom, lower_top=company_top)
-        job_lines, job_size, job_lh = _fit_text_in_box(
-            c,
-            jobtitle,
-            FONT_NAME_JOB,
-            FONT_SIZE_JOB_MAX,
-            MIN_FONT_SIZE_JOB,
-            job_box[1] - job_box[0],
-            job_box[3] - job_box[2],
-            MAX_LINES_JOB,
-        )
+        if name_bottom is None or company_top is None or name_bottom <= company_top:
+            job_box = box_job
+            job_lines, job_size, job_lh = _fit_text_in_box(
+                c,
+                jobtitle,
+                FONT_NAME_JOB,
+                FONT_SIZE_JOB_MAX,
+                MIN_FONT_SIZE_JOB,
+                job_box[1] - job_box[0],
+                job_box[3] - job_box[2],
+                MAX_LINES_JOB,
+            )
+        else:
+            full_job_box = _jobtitle_box_between(box_job, upper_bottom=name_bottom, lower_top=company_top)
+            chosen_job = None
+
+            for gap in (JOBTITLE_GAP_TARGET, JOBTITLE_GAP_MIN):
+                candidate_box = _jobtitle_box_with_gap(
+                    box_job,
+                    upper_bottom=name_bottom,
+                    lower_top=company_top,
+                    gap=gap,
+                )
+                if candidate_box is None:
+                    continue
+                candidate_lines, candidate_size, candidate_lh, fits_without_truncation = _fit_text_in_box_details(
+                    c,
+                    jobtitle,
+                    FONT_NAME_JOB,
+                    FONT_SIZE_JOB_MAX,
+                    MIN_FONT_SIZE_JOB,
+                    candidate_box[1] - candidate_box[0],
+                    candidate_box[3] - candidate_box[2],
+                    MAX_LINES_JOB,
+                )
+                if fits_without_truncation:
+                    chosen_job = (candidate_box, candidate_lines, candidate_size, candidate_lh)
+                    break
+
+            if chosen_job is None:
+                job_lines, job_size, job_lh, _ = _fit_text_in_box_details(
+                    c,
+                    jobtitle,
+                    FONT_NAME_JOB,
+                    FONT_SIZE_JOB_MAX,
+                    MIN_FONT_SIZE_JOB,
+                    full_job_box[1] - full_job_box[0],
+                    full_job_box[3] - full_job_box[2],
+                    MAX_LINES_JOB,
+                )
+                job_box = full_job_box
+            else:
+                job_box, job_lines, job_size, job_lh = chosen_job
 
         _draw_centered_lines_in_box(c, first_lines, FONT_NAME_FIRST, first_size, box_first[0], box_first[1], box_first[2], box_first[3], first_lh)
         _draw_centered_lines_in_box(c, last_lines, FONT_NAME_LAST, last_size, box_last[0], box_last[1], box_last[2], box_last[3], last_lh)

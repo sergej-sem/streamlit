@@ -58,6 +58,7 @@ _BG_SEVERIN_ADDR  = "severin.wagner@mysecurityevent.de"
 _BG_CONFIRM_WORD  = "ENTWÜRFE"
 _BG_DEFAULT_SUBJECT = "Dein Badge – {vorname}"
 _BG_DEFAULT_BODY    = "anbei finden Sie Ihren persönlichen Badge für die Veranstaltung."
+_BG_DEFAULT_EVENT_TAG = "26BER"
 
 def _bg_load_imap_defaults() -> tuple[str, int, str, bool]:
     try:
@@ -132,7 +133,7 @@ st.markdown("**Historie-Präfix**")
 event_tag = st.selectbox(
     "Historie-Präfix",
     options=EVENT_TAGS,
-    index=0,
+    index=EVENT_TAGS.index(_BG_DEFAULT_EVENT_TAG) if _BG_DEFAULT_EVENT_TAG in EVENT_TAGS else 0,
     label_visibility="collapsed",
 )
 

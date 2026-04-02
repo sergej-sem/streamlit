@@ -41,9 +41,12 @@ from badgegen.render_pdf import (
     _centered_block_edges,
     _fit_text_in_box,
     _jobtitle_box_between,
+    _jobtitle_box_with_gap,
     _mm_box_to_points,
     _qr_color_for_category,
     _wrap_words,
+    JOBTITLE_GAP_MIN,
+    JOBTITLE_GAP_TARGET,
     render_badges_pdf_bytes,
 )
 from reportlab.lib.units import mm
@@ -514,6 +517,18 @@ class JobtitlePlacementHelperTests(unittest.TestCase):
 
         self.assertEqual((10.0, 95.0, 90.0, 120.0), centered)
 
+    def test_jobtitle_box_with_gap_reserves_equal_space_above_and_below(self):
+        default_box = (10.0, 95.0, 79.0, 88.0)
+        reserved = _jobtitle_box_with_gap(default_box, upper_bottom=120.0, lower_top=90.0, gap=10.0)
+
+        self.assertEqual((10.0, 95.0, 100.0, 110.0), reserved)
+
+    def test_jobtitle_box_with_gap_returns_none_when_gap_does_not_fit(self):
+        default_box = (10.0, 95.0, 79.0, 88.0)
+        reserved = _jobtitle_box_with_gap(default_box, upper_bottom=100.0, lower_top=90.0, gap=6.0)
+
+        self.assertIsNone(reserved)
+
     def test_jobtitle_box_falls_back_without_name_reference(self):
         default_box = (10.0, 95.0, 79.0, 88.0)
         self.assertEqual(
@@ -573,13 +588,33 @@ class RenderedJobtitlePlacementTests(unittest.TestCase):
 
         return draw_calls
 
-    def test_jobtitle_uses_dynamic_gap_box_when_name_and_company_exist(self):
+    def _render_and_measure_gaps(self, row: dict) -> tuple[dict, float, float]:
+        draw_calls = self._capture_draw_calls(row)
+        name_call = draw_calls[1] if row.get("lastname", "").strip() else draw_calls[0]
+        job_call = draw_calls[2]
+        company_call = draw_calls[3]
+
+        _, name_bottom = _centered_block_edges(
+            name_call["box"][2], name_call["box"][3], name_call["line_h"], len(name_call["lines"])
+        )
+        company_top, _ = _centered_block_edges(
+            company_call["box"][2], company_call["box"][3], company_call["line_h"], len(company_call["lines"])
+        )
+        job_top, job_bottom = _centered_block_edges(
+            job_call["box"][2], job_call["box"][3], job_call["line_h"], len(job_call["lines"])
+        )
+
+        gap_above = name_bottom - job_top
+        gap_below = job_bottom - company_top
+        return job_call, gap_above, gap_below
+
+    def test_jobtitle_uses_target_gap_when_space_allows_it(self):
         row = {
             "id": "1",
-            "firstname": "Maximilian Alexander",
-            "lastname": "von Hohenstein-Falkenried",
+            "firstname": "Max",
+            "lastname": "Mustermann",
             "jobtitle": "Security Architect",
-            "company": "International Cyber Security Solutions Group",
+            "company": "ACME",
             "kategorie": "TN",
         }
 
@@ -587,14 +622,185 @@ class RenderedJobtitlePlacementTests(unittest.TestCase):
         job_call = draw_calls[2]
         last_call = draw_calls[1]
         company_call = draw_calls[3]
-        static_job_box = _mm_box_to_points(TEXT_BOXES_MM["jobtitle"])
 
         _, name_bottom = _centered_block_edges(last_call["box"][2], last_call["box"][3], last_call["line_h"], len(last_call["lines"]))
         company_top, _ = _centered_block_edges(company_call["box"][2], company_call["box"][3], company_call["line_h"], len(company_call["lines"]))
-        expected_box = _jobtitle_box_between(static_job_box, upper_bottom=name_bottom, lower_top=company_top)
+        expected_box = _jobtitle_box_with_gap(
+            _mm_box_to_points(TEXT_BOXES_MM["jobtitle"]),
+            upper_bottom=name_bottom,
+            lower_top=company_top,
+            gap=JOBTITLE_GAP_TARGET,
+        )
 
         self.assertEqual(expected_box, job_call["box"])
-        self.assertNotEqual(static_job_box, job_call["box"])
+
+    def test_jobtitle_uses_min_gap_when_target_gap_would_be_too_tight(self):
+        row = {
+            "id": "1",
+            "firstname": "Max",
+            "lastname": "Mustermann",
+            "jobtitle": "Security Architect",
+            "company": "ACME",
+            "kategorie": "TN",
+        }
+
+        original_fit_details = render_pdf_module._fit_text_in_box_details
+        original_draw = render_pdf_module._draw_centered_lines_in_box
+        draw_calls: list[dict] = []
+        job_fit_calls = {"count": 0}
+
+        def tracking_draw(*args, **kwargs):
+            draw_calls.append({
+                "lines": list(args[1]),
+                "box": (args[4], args[5], args[6], args[7]),
+                "line_h": args[8],
+            })
+            return original_draw(*args, **kwargs)
+
+        def selective_fit(*args, **kwargs):
+            text = args[1]
+            font = args[2]
+            if text == row["jobtitle"] and font == FONT_NAME_JOB:
+                job_fit_calls["count"] += 1
+                if job_fit_calls["count"] == 1:
+                    return ["Security Architect"], 18, 12.0, False
+                if job_fit_calls["count"] == 2:
+                    return ["Security Architect"], 18, 12.0, True
+            return original_fit_details(*args, **kwargs)
+
+        with patch("badgegen.render_pdf._fit_text_in_box_details", side_effect=selective_fit), \
+             patch("badgegen.render_pdf._draw_centered_lines_in_box", side_effect=tracking_draw):
+            render_badges_pdf_bytes(
+                rows=[row],
+                template_by_category=self._tpl_map,
+                uppercase_names=False,
+                uppercase_company=False,
+                colored_qr=False,
+            )
+
+        job_call = draw_calls[2]
+        last_call = draw_calls[1]
+        company_call = draw_calls[3]
+        _, name_bottom = _centered_block_edges(last_call["box"][2], last_call["box"][3], last_call["line_h"], len(last_call["lines"]))
+        company_top, _ = _centered_block_edges(company_call["box"][2], company_call["box"][3], company_call["line_h"], len(company_call["lines"]))
+        expected_box = _jobtitle_box_with_gap(
+            _mm_box_to_points(TEXT_BOXES_MM["jobtitle"]),
+            upper_bottom=name_bottom,
+            lower_top=company_top,
+            gap=JOBTITLE_GAP_MIN,
+        )
+
+        self.assertEqual(2, job_fit_calls["count"])
+        self.assertEqual(expected_box, job_call["box"])
+
+    def test_jobtitle_falls_back_to_full_gap_when_reserved_gap_still_does_not_fit(self):
+        row = {
+            "id": "1",
+            "firstname": "Max",
+            "lastname": "Mustermann",
+            "jobtitle": "Security Architect",
+            "company": "ACME",
+            "kategorie": "TN",
+        }
+
+        original_fit_details = render_pdf_module._fit_text_in_box_details
+        original_draw = render_pdf_module._draw_centered_lines_in_box
+        draw_calls: list[dict] = []
+        job_fit_calls = {"count": 0}
+
+        def tracking_draw(*args, **kwargs):
+            draw_calls.append({
+                "lines": list(args[1]),
+                "box": (args[4], args[5], args[6], args[7]),
+                "line_h": args[8],
+            })
+            return original_draw(*args, **kwargs)
+
+        def selective_fit(*args, **kwargs):
+            text = args[1]
+            font = args[2]
+            if text == row["jobtitle"] and font == FONT_NAME_JOB:
+                job_fit_calls["count"] += 1
+                if job_fit_calls["count"] in {1, 2}:
+                    return ["Security Architect"], 18, 12.0, False
+                if job_fit_calls["count"] == 3:
+                    return ["Security Architect"], 18, 12.0, True
+            return original_fit_details(*args, **kwargs)
+
+        with patch("badgegen.render_pdf._fit_text_in_box_details", side_effect=selective_fit), \
+             patch("badgegen.render_pdf._draw_centered_lines_in_box", side_effect=tracking_draw):
+            render_badges_pdf_bytes(
+                rows=[row],
+                template_by_category=self._tpl_map,
+                uppercase_names=False,
+                uppercase_company=False,
+                colored_qr=False,
+            )
+
+        job_call = draw_calls[2]
+        last_call = draw_calls[1]
+        company_call = draw_calls[3]
+        _, name_bottom = _centered_block_edges(last_call["box"][2], last_call["box"][3], last_call["line_h"], len(last_call["lines"]))
+        company_top, _ = _centered_block_edges(company_call["box"][2], company_call["box"][3], company_call["line_h"], len(company_call["lines"]))
+        expected_box = _jobtitle_box_between(
+            _mm_box_to_points(TEXT_BOXES_MM["jobtitle"]),
+            upper_bottom=name_bottom,
+            lower_top=company_top,
+        )
+
+        self.assertEqual(3, job_fit_calls["count"])
+        self.assertEqual(expected_box, job_call["box"])
+
+    def test_jobtitle_gaps_stay_equal_for_requested_smoke_cases(self):
+        cases = [
+            {
+                "id": "1",
+                "firstname": "Max",
+                "lastname": "Mustermann",
+                "jobtitle": "CEO",
+                "company": "ACME",
+                "kategorie": "TN",
+            },
+            {
+                "id": "2",
+                "firstname": "Max",
+                "lastname": "Mustermann",
+                "jobtitle": "Senior Vice President International Business Development and Strategic Partnerships and Alliances",
+                "company": "ACME",
+                "kategorie": "TN",
+            },
+            {
+                "id": "3",
+                "firstname": "Max",
+                "lastname": "Mustermann",
+                "jobtitle": "CEO",
+                "company": "Internationale Gesellschaft fuer Unternehmensberatung und Strategieentwicklung GmbH & Co. KG",
+                "kategorie": "TN",
+            },
+            {
+                "id": "4",
+                "firstname": "Max",
+                "lastname": "Mustermann",
+                "jobtitle": "Senior Vice President International Business Development and Strategic Partnerships and Alliances",
+                "company": "Internationale Gesellschaft fuer Unternehmensberatung und Strategieentwicklung GmbH & Co. KG",
+                "kategorie": "TN",
+            },
+            {
+                "id": "5",
+                "firstname": "Maximilian Alexander",
+                "lastname": "von Hohenstein-Falkenried",
+                "jobtitle": "Senior Vice President International Business Development and Strategic Partnerships and Alliances",
+                "company": "Internationale Gesellschaft fuer Unternehmensberatung und Strategieentwicklung GmbH & Co. KG",
+                "kategorie": "TN",
+            },
+        ]
+
+        for row in cases:
+            with self.subTest(row=row["id"]):
+                _, gap_above, gap_below = self._render_and_measure_gaps(row)
+                self.assertGreater(gap_above, 0)
+                self.assertGreater(gap_below, 0)
+                self.assertAlmostEqual(gap_above, gap_below, delta=0.5)
 
     def test_jobtitle_falls_back_to_static_box_without_company(self):
         row = {
