@@ -3,7 +3,6 @@ import re
 from pathlib import Path
 
 import streamlit as st
-from streamlit_searchbox import st_searchbox  # pip install streamlit-searchbox
 from streamlit_ui import render_page_title
 
 st.set_page_config(page_title="Dashboard", layout="wide")
@@ -128,7 +127,7 @@ def _dedupe_recent(recent_list: list[dict]) -> list[dict]:
 
 
 def _clear_searchbox_state():
-    # searchbox speichert intern ein dict unter dem key
+    # selectbox speichert direkt den ausgewählten Label-String unter dem key
     st.session_state.pop(SEARCHBOX_KEY, None)
 
 
@@ -187,6 +186,16 @@ def _label_for_dropdown(p: dict, title_counts: dict[str, int]) -> str:
     return p["title"]
 
 
+def _selectbox_options_and_lookup(items: list[dict], title_counts: dict[str, int]) -> tuple[list[str], dict[str, dict]]:
+    options: list[str] = []
+    lookup: dict[str, dict] = {}
+    for item in items:
+        label = _label_for_dropdown(item, title_counts)
+        options.append(label)
+        lookup[label] = item
+    return options, lookup
+
+
 # ---------- UI ----------
 render_page_title("Dashboard")
 
@@ -208,52 +217,29 @@ title_counts: dict[str, int] = {}
 for p in pages_all:
     title_counts[p["title"]] = title_counts.get(p["title"], 0) + 1
 
-# Default-Vorschläge: alphabetisch
-default_items = sorted(pages_all, key=lambda p: (p["title"].lower(), p["category"].lower()))[:8]
-
-default_options = [(_label_for_dropdown(p, title_counts), p) for p in default_items]
-
-
-def search_pages(searchterm: str):
-    term = (searchterm or "").strip().lower()
-    if not term:
-        return []
-
-    scored = []
-    for p in pages_all:
-        hay = f"{p['title']} {p['category']}".lower()
-        if term in hay:
-            # Ranking: Titel-startswith vor contains
-            score = 0
-            if p["title"].lower().startswith(term):
-                score -= 20
-            elif p["category"].lower().startswith(term):
-                score -= 10
-            score += len(p["title"])
-            scored.append((score, p))
-
-    scored.sort(key=lambda x: x[0])
-    top = [p for _, p in scored[:10]]
-    return [(_label_for_dropdown(p, title_counts), p) for p in top]
+search_options, search_lookup = _selectbox_options_and_lookup(
+    sorted(pages_all, key=lambda p: (p["title"].lower(), p["category"].lower())),
+    title_counts,
+)
 
 
-def _on_submit(selected_item):
-    # Wird aufgerufen bei Auswahl (Click ODER Enter auf markiertem Vorschlag)
-    if isinstance(selected_item, dict) and "path" in selected_item:
-        _go_to(selected_item)
+def _on_page_select() -> None:
+    selected_label = st.session_state.get(SEARCHBOX_KEY)
+    if not selected_label:
+        return
+    item = search_lookup.get(selected_label)
+    if item:
+        _go_to(item)
 
 
-# Searchbox: Navigation direkt in submit_function (kein "sticky selected" mehr)
-st_searchbox(
-    search_pages,
+st.selectbox(
+    "Seite suchen",
+    options=search_options,
     key=SEARCHBOX_KEY,
     placeholder="Seite suchen …",
-    label=None,
-    default=None,
-    default_options=default_options,
-    debounce=120,
-    clear_on_submit=True,
-    submit_function=_on_submit,
+    index=None,
+    label_visibility="collapsed",
+    on_change=_on_page_select,
 )
 
 # ---- Alle Bereiche ----
