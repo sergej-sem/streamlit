@@ -3,13 +3,10 @@ from __future__ import annotations
 import imaplib
 import time
 from dataclasses import dataclass
-from email.message import EmailMessage
-from email.policy import SMTP
-from email.utils import formatdate, make_msgid
 import pandas as pd
 
 from .core import GeneratedMail
-from serienmailing.mail_builder import html_to_plain_text
+from shared.mail_message import build_email_message_bytes
 
 
 @dataclass(frozen=True)
@@ -36,17 +33,13 @@ class ImapDraftRecord:
 
 
 def _build_message(mail: GeneratedMail, config: ImapDraftConfig) -> bytes:
-    message = EmailMessage()
-    message["Subject"] = mail.subject
-    message["From"] = config.username
-    message["To"] = mail.to_email
-    if mail.cc_email:
-        message["Cc"] = mail.cc_email
-    message["Date"] = formatdate(localtime=True)
-    message["Message-ID"] = make_msgid()
-    message.set_content(html_to_plain_text(mail.html_body))
-    message.add_alternative(mail.html_body, subtype="html")
-    return message.as_bytes(policy=SMTP)
+    return build_email_message_bytes(
+        from_email=config.username,
+        to_email=mail.to_email,
+        cc_email=mail.cc_email,
+        subject=mail.subject,
+        html_body=mail.html_body,
+    )
 
 
 def _connect(config: ImapDraftConfig):

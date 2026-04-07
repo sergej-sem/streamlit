@@ -4,12 +4,9 @@ from __future__ import annotations
 
 import imaplib
 import time
-from dataclasses import dataclass, field
-from email.message import EmailMessage
-from email.policy import SMTP
-from email.utils import formatdate, make_msgid
+from dataclasses import dataclass
 
-from serienmailing.mail_builder import html_to_plain_text
+from shared.mail_message import build_email_message_bytes
 
 
 @dataclass(frozen=True)
@@ -39,42 +36,19 @@ class SerienMailResult:
     vorname: str
     firma: str
     subject: str
-    status: str   # "draft_created" | "error"
+    status: str   # "draft_created" | "sent" | "error"
     details: str
 
 
 def _build_message(mail: SerienMail, config: MailConfig) -> bytes:
-    msg = EmailMessage()
-    msg["Subject"] = mail.subject
-    msg["From"] = config.username
-    msg["To"] = mail.to_email
-    msg["Date"] = formatdate(localtime=True)
-    msg["Message-ID"] = make_msgid()
-
-    msg.set_content(html_to_plain_text(mail.html_body))
-    msg.add_alternative(mail.html_body, subtype="html")
-
-    if mail.attachment_bytes and mail.attachment_filename:
-        # Determine MIME type from filename extension
-        filename = mail.attachment_filename
-        ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
-        mime_map = {
-            "pdf": ("application", "pdf"),
-            "png": ("image", "png"),
-            "jpg": ("image", "jpeg"),
-            "jpeg": ("image", "jpeg"),
-            "xlsx": ("application", "vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
-            "docx": ("application", "vnd.openxmlformats-officedocument.wordprocessingml.document"),
-        }
-        maintype, subtype = mime_map.get(ext, ("application", "octet-stream"))
-        msg.add_attachment(
-            mail.attachment_bytes,
-            maintype=maintype,
-            subtype=subtype,
-            filename=filename,
-        )
-
-    return msg.as_bytes(policy=SMTP)
+    return build_email_message_bytes(
+        from_email=config.username,
+        to_email=mail.to_email,
+        subject=mail.subject,
+        html_body=mail.html_body,
+        attachment_bytes=mail.attachment_bytes,
+        attachment_filename=mail.attachment_filename,
+    )
 
 
 def _connect(config: MailConfig):

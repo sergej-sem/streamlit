@@ -25,6 +25,15 @@ class ImapDraftSettings:
     use_ssl: bool = True
 
 
+@dataclass(frozen=True)
+class SmtpSendSettings:
+    host: str
+    port: int = 465
+    use_ssl: bool = True
+    use_starttls: bool = False
+    timeout_seconds: int = 30
+
+
 _MISSING = object()
 _TRUTHY = {"1", "true", "yes", "on"}
 _FALSY = {"0", "false", "no", "off", ""}
@@ -157,4 +166,39 @@ def load_imap_draft_settings(secrets: Any = None) -> ImapDraftSettings:
         port=port,
         drafts_folder=drafts_folder,
         use_ssl=use_ssl,
+    )
+
+
+def load_smtp_send_settings(secrets: Any = None) -> SmtpSendSettings:
+    section_name = "mse_smtp_mail_send"
+    section = _require_section(secrets, section_name)
+
+    host = _require_value(section, section_name, "host")
+    port_raw = _mapping_get(section, "port", 465)
+    timeout_raw = _mapping_get(section, "timeout_seconds", 30)
+
+    try:
+        port = int(port_raw)
+    except (TypeError, ValueError) as exc:
+        raise ConfigError(f"Invalid config value: {section_name}.port") from exc
+
+    try:
+        timeout_seconds = int(timeout_raw)
+    except (TypeError, ValueError) as exc:
+        raise ConfigError(f"Invalid config value: {section_name}.timeout_seconds") from exc
+
+    if timeout_seconds <= 0:
+        raise ConfigError(f"Invalid config value: {section_name}.timeout_seconds")
+
+    use_ssl = parse_bool(_mapping_get(section, "use_ssl"), default=True)
+    use_starttls = parse_bool(_mapping_get(section, "use_starttls"), default=False)
+    if use_ssl and use_starttls:
+        raise ConfigError(f"Invalid config combination: {section_name}.use_ssl and {section_name}.use_starttls")
+
+    return SmtpSendSettings(
+        host=host,
+        port=port,
+        use_ssl=use_ssl,
+        use_starttls=use_starttls,
+        timeout_seconds=timeout_seconds,
     )

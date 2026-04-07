@@ -17,37 +17,60 @@ from serienmailing.mail_builder import (
     build_html_body,
     build_subject,
 )
-from shared.config import ConfigError, load_imap_draft_settings
+from serienmailing.smtp_sender import send_serienmailing_messages
+from shared.config import (
+    ConfigError,
+    load_imap_draft_settings,
+    load_smtp_send_settings,
+)
+from shared.smtp_sender import SmtpSendConfig
 from streamlit_ui import render_email_selectbox
 
 st.set_page_config(page_title="Serienmailing", layout="wide")
 
-_CONFIRM_WORD = "ENTWÜRFE"
+_CONFIRM_WORD_DRAFT = "ENTW\u00dcRFE"
+_CONFIRM_WORD_SEND = "SENDEN"
 _SEVERIN_ADDR = "severin.wagner@mysecurityevent.de"
+_MAIL_MODE_OPTIONS = ("Entw\u00fcrfe", "Senden")
 
 
 def _init_state() -> None:
     st.session_state.setdefault("sm_contacts", None)
-    st.session_state.setdefault("sm_draft_result", None)
+    st.session_state.setdefault("sm_mail_result", None)
 
 
 def _load_imap_defaults() -> tuple[str, int, str, bool]:
-    """Return (host, port, drafts_folder, use_ssl) from secrets or empty defaults."""
     try:
-        s = load_imap_draft_settings(st.secrets)
-        return s.host, s.port, s.drafts_folder, s.use_ssl
+        settings = load_imap_draft_settings(st.secrets)
+        return settings.host, settings.port, settings.drafts_folder, settings.use_ssl
     except ConfigError:
         return "", 993, "Drafts", True
 
 
-@st.cache_data(show_spinner="HubSpot-Listen laden …")
+def _load_smtp_defaults() -> tuple[str, int, bool, bool, int]:
+    try:
+        settings = load_smtp_send_settings(st.secrets)
+        return (
+            settings.host,
+            settings.port,
+            settings.use_ssl,
+            settings.use_starttls,
+            settings.timeout_seconds,
+        )
+    except ConfigError:
+        return "", 465, True, False, 30
+
+
+@st.cache_data(show_spinner="HubSpot-Listen laden ...")
 def _cached_contact_lists() -> list[dict]:
     from teilnehmerliste_generator.hubspot_client import get_contact_lists
+
     return get_contact_lists()
 
 
 def _load_hubspot_contacts(list_id: str) -> pd.DataFrame:
     from teilnehmerliste_generator.hubspot_client import get_contacts_by_ids, get_list_members
+
     ids = get_list_members(list_id)
     if not ids:
         return pd.DataFrame(columns=COLS)
@@ -55,29 +78,26 @@ def _load_hubspot_contacts(list_id: str) -> pd.DataFrame:
     return contacts_from_hubspot_raw(raw)
 
 
-# ──────────────────────────────────────────────────────────────────────────────
 _init_state()
 
 st.title("Serienmailing")
 
-# ── 1. IMAP-Zugangsdaten ──────────────────────────────────────────────────────
-# host/port/folder/ssl kommen aus st.secrets ([mse_imap_mail_drafts]) — unsichtbar für den Benutzer
 imap_host, imap_port, imap_folder, imap_ssl = _load_imap_defaults()
+smtp_host, smtp_port, smtp_use_ssl, smtp_use_starttls, smtp_timeout = _load_smtp_defaults()
 
 col_cred_a, col_cred_b = st.columns(2)
 with col_cred_a:
-    imap_user = render_email_selectbox(
+    sender_email = render_email_selectbox(
         "E-Mail-Adresse (Absender)",
         key="sm_sender_email",
         suggestions=SENDER_EMAIL_SUGGESTIONS,
         placeholder="vorname.nachname@mysecurityevent.de",
     )
 with col_cred_b:
-    imap_pass = st.text_input("Passwort", type="password")
+    sender_password = st.text_input("Passwort", type="password")
 
 st.divider()
 
-# ── 2. Kontakte ───────────────────────────────────────────────────────────────
 st.subheader("Kontakte")
 
 tab_excel, tab_hs, tab_manual = st.tabs(["Excel / CSV", "HubSpot", "Manuell"])
@@ -91,11 +111,11 @@ with tab_excel:
             else:
                 raw_df = pd.read_excel(uploaded)
             contacts, warns = contacts_from_excel(raw_df)
-            for w in warns:
-                st.warning(w)
-            if st.button("Diese Kontakte übernehmen", key="btn_excel"):
+            for warning in warns:
+                st.warning(warning)
+            if st.button("Diese Kontakte \u00fcbernehmen", key="btn_excel"):
                 st.session_state["sm_contacts"] = contacts
-                st.session_state["sm_draft_result"] = None
+                st.session_state["sm_mail_result"] = None
                 st.rerun()
         except Exception as exc:
             st.error(f"Fehler beim Lesen der Datei: {exc}")
@@ -106,24 +126,24 @@ with tab_hs:
         if not lists:
             st.info("Keine HubSpot-Listen gefunden.")
         else:
-            list_options = {l.get("name") or str(l.get("listId", "?")): l.get("listId") for l in lists}
+            list_options = {item.get("name") or str(item.get("listId", "?")): item.get("listId") for item in lists}
             selected_label = st.selectbox(
-                "Liste auswählen",
+                "Liste ausw\u00e4hlen",
                 options=list(list_options.keys()),
                 index=None,
-                placeholder="Bitte Liste auswählen …",
+                placeholder="Bitte Liste ausw\u00e4hlen ...",
             )
             if st.button("Liste laden", key="btn_hs_load", disabled=selected_label is None):
-                with st.spinner("Kontakte werden geladen …"):
+                with st.spinner("Kontakte werden geladen ..."):
                     try:
                         contacts = _load_hubspot_contacts(list_options[selected_label])
                         st.session_state["sm_contacts"] = contacts
-                        st.session_state["sm_draft_result"] = None
+                        st.session_state["sm_mail_result"] = None
                         st.rerun()
                     except Exception as exc:
                         st.error(f"HubSpot-Fehler: {exc}")
     except Exception as exc:
-        st.warning(f"HubSpot nicht verfügbar: {exc}")
+        st.warning(f"HubSpot nicht verf\u00fcgbar: {exc}")
 
 with tab_manual:
     manual_template = pd.DataFrame({"vorname": [""], "firma": [""], "email": [""]})
@@ -134,21 +154,20 @@ with tab_manual:
         hide_index=True,
         key="sm_manual_editor",
     )
-    if st.button("Diese Kontakte übernehmen", key="btn_manual"):
+    if st.button("Diese Kontakte \u00fcbernehmen", key="btn_manual"):
         contacts, warns = contacts_from_manual(edited)
-        for w in warns:
-            st.warning(w)
+        for warning in warns:
+            st.warning(warning)
         st.session_state["sm_contacts"] = contacts
-        st.session_state["sm_draft_result"] = None
+        st.session_state["sm_mail_result"] = None
         st.rerun()
 
-# ── Kontakt-Vorschau ──────────────────────────────────────────────────────────
 contacts_df: pd.DataFrame | None = st.session_state["sm_contacts"]
 
 if contacts_df is not None and not contacts_df.empty:
     errors = validate_contacts(contacts_df)
-    for e in errors:
-        st.warning(e)
+    for error in errors:
+        st.warning(error)
     st.caption(f"{len(contacts_df)} Kontakt(e) geladen")
     st.dataframe(contacts_df, use_container_width=True, hide_index=True)
 else:
@@ -156,115 +175,154 @@ else:
 
 st.divider()
 
-# ── 3. E-Mail-Formular ────────────────────────────────────────────────────────
 st.subheader("E-Mail")
 
 subject_tpl = st.text_input(
     "Betreff",
-    placeholder="z. B. Einladung – {firma}",
+    placeholder="z. B. Einladung - {firma}",
     help="Platzhalter: {vorname}, {firma}, {email}",
 )
 mail_text = st.text_area(
     "Text",
     height=200,
-    placeholder="Ihr Text hier …\n\nZeilenumbrüche werden korrekt übernommen.",
+    placeholder="Ihr Text hier ...\n\nZeilenumbrueche werden korrekt uebernommen.",
     help="Platzhalter: {vorname}, {firma}, {email}",
 )
 
 attachment_file = st.file_uploader("Anhang (optional)", key="sm_attachment")
 
-# ── Vorschau ──────────────────────────────────────────────────────────────────
-# Signatur nur für Severin
-sig_html = SIGNATURE_SEVERIN_HTML if imap_user.strip().lower() == _SEVERIN_ADDR else ""
+signature_html = SIGNATURE_SEVERIN_HTML if sender_email.strip().lower() == _SEVERIN_ADDR else ""
 
 if contacts_df is not None and not contacts_df.empty and subject_tpl and mail_text:
     st.markdown("**Vorschau**")
     preview_labels = [
-        f"{row['vorname']} – {row['email']}" if row["vorname"] else row["email"]
+        f"{row['vorname']} - {row['email']}" if row["vorname"] else row["email"]
         for _, row in contacts_df.iterrows()
     ]
     preview_idx = st.selectbox(
-        "Vorschau für Kontakt",
+        "Vorschau fuer Kontakt",
         options=range(len(preview_labels)),
         format_func=lambda i: preview_labels[i],
         label_visibility="collapsed",
     )
     preview_row = contacts_df.iloc[preview_idx]
     preview_subject = build_subject(subject_tpl, preview_row["vorname"], preview_row["firma"], preview_row["email"])
-    preview_body = build_html_body(preview_row["vorname"], mail_text, sig_html, preview_row["firma"], preview_row["email"])
+    preview_body = build_html_body(
+        preview_row["vorname"],
+        mail_text,
+        signature_html,
+        preview_row["firma"],
+        preview_row["email"],
+    )
     st.caption(f"Betreff: {preview_subject}")
     st.html(preview_body)
 
 st.divider()
 
-# ── 4. Entwürfe erstellen ─────────────────────────────────────────────────────
-st.subheader("Entwürfe erstellen")
+st.subheader("Versand")
 
-n_contacts = len(contacts_df) if (contacts_df is not None and not contacts_df.empty) else 0
-expected_confirm = f"{_CONFIRM_WORD} {n_contacts}"
+mail_mode = st.radio(
+    "Modus",
+    options=_MAIL_MODE_OPTIONS,
+    index=0,
+    horizontal=True,
+    key="sm_mail_mode",
+)
+is_send_mode = mail_mode == "Senden"
+
+n_contacts = len(contacts_df) if contacts_df is not None and not contacts_df.empty else 0
+confirm_word = _CONFIRM_WORD_SEND if is_send_mode else _CONFIRM_WORD_DRAFT
+expected_confirm = f"{confirm_word} {n_contacts}"
 
 confirm_input = st.text_input(
-    f'Zur Bestätigung eingeben: **{expected_confirm}**',
+    f"Zur Bestaetigung eingeben: **{expected_confirm}**",
     placeholder=expected_confirm,
 )
 confirmed = confirm_input.strip() == expected_confirm and n_contacts > 0
 
+if is_send_mode and not smtp_host:
+    st.warning("SMTP-Konfiguration fehlt. Bitte `mse_smtp_mail_send` in den Secrets pruefen.")
+elif (not is_send_mode) and not imap_host:
+    st.warning("IMAP-Draft-Konfiguration fehlt. Bitte `mse_imap_mail_drafts` in den Secrets pruefen.")
+
 ready = (
     confirmed
-    and bool(imap_host)
-    and bool(imap_user.strip())
-    and bool(imap_pass)
+    and bool(sender_email.strip())
+    and bool(sender_password)
     and bool(subject_tpl.strip())
     and bool(mail_text.strip())
+    and bool(smtp_host if is_send_mode else imap_host)
 )
 
-if st.button("Entwürfe erstellen", disabled=not ready, type="primary"):
+button_label = "E-Mails senden" if is_send_mode else "Entwuerfe erstellen"
+spinner_label = "E-Mails werden gesendet ..." if is_send_mode else "Entwuerfe werden erstellt ..."
+
+if st.button(button_label, disabled=not ready, type="primary"):
     attachment_bytes = attachment_file.read() if attachment_file else None
     attachment_name = attachment_file.name if attachment_file else None
-
     mails = [
         SerienMail(
             to_email=row["email"],
             vorname=row["vorname"],
             firma=row["firma"],
             subject=build_subject(subject_tpl, row["vorname"], row["firma"], row["email"]),
-            html_body=build_html_body(row["vorname"], mail_text, sig_html, row["firma"], row["email"]),
+            html_body=build_html_body(row["vorname"], mail_text, signature_html, row["firma"], row["email"]),
             attachment_bytes=attachment_bytes,
             attachment_filename=attachment_name,
         )
         for _, row in contacts_df.iterrows()
     ]
 
-    config = MailConfig(
-        host=imap_host,
-        port=imap_port,
-        username=imap_user.strip(),
-        password=imap_pass,
-        drafts_folder=imap_folder or "Drafts",
-        use_ssl=imap_ssl,
-    )
-
-    with st.spinner("Entwürfe werden erstellt …"):
+    with st.spinner(spinner_label):
         try:
-            results = create_serienmailing_drafts(mails, config)
-            st.session_state["sm_draft_result"] = results
+            if is_send_mode:
+                results = send_serienmailing_messages(
+                    mails,
+                    SmtpSendConfig(
+                        host=smtp_host,
+                        port=smtp_port,
+                        username=sender_email.strip(),
+                        password=sender_password,
+                        use_ssl=smtp_use_ssl,
+                        use_starttls=smtp_use_starttls,
+                        timeout_seconds=smtp_timeout,
+                    ),
+                )
+            else:
+                results = create_serienmailing_drafts(
+                    mails,
+                    MailConfig(
+                        host=imap_host,
+                        port=imap_port,
+                        username=sender_email.strip(),
+                        password=sender_password,
+                        drafts_folder=imap_folder or "Drafts",
+                        use_ssl=imap_ssl,
+                    ),
+                )
+            st.session_state["sm_mail_result"] = {"mode": mail_mode, "results": results}
         except Exception as exc:
             st.error(str(exc))
 
-# ── Ergebnis-Tabelle ──────────────────────────────────────────────────────────
-draft_result = st.session_state.get("sm_draft_result")
-if draft_result:
+mail_result = st.session_state.get("sm_mail_result")
+if mail_result:
+    result_mode = mail_result.get("mode", "Entwuerfe")
+    results = mail_result.get("results", [])
+    success_status = "sent" if result_mode == "Senden" else "draft_created"
+    success_label = "Gesendet" if result_mode == "Senden" else "Entwurf gespeichert"
+    summary_label = "E-Mail(s) gesendet" if result_mode == "Senden" else "Entwurf/Entwuerfe gespeichert"
+
     result_rows = [
         {
-            "Vorname": r.vorname,
-            "Firma": r.firma,
-            "E-Mail": r.to_email,
-            "Status": r.details if r.status == "error" and r.details else "Entwurf gespeichert",
+            "Vorname": result.vorname,
+            "Firma": result.firma,
+            "E-Mail": result.to_email,
+            "Status": result.details if result.status == "error" and result.details else success_label,
         }
-        for r in draft_result
+        for result in results
     ]
     result_df = pd.DataFrame(result_rows)
-    ok = sum(1 for r in draft_result if r.status == "draft_created")
-    err = len(draft_result) - ok
-    st.success(f"{ok} Entwurf/Entwürfe gespeichert." + (f"  {err} Fehler." if err else ""))
+    ok = sum(1 for result in results if result.status == success_status)
+    err = len(results) - ok
+    st.success(f"{ok} {summary_label}." + (f"  {err} Fehler." if err else ""))
     st.dataframe(result_df, use_container_width=True, hide_index=True)

@@ -8,25 +8,12 @@ import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
 
-from shared.config import ConfigError, load_imap_draft_settings
-
-_SIGNATURES: dict[str, str] = {
-    "severin.wagner@mysecurityevent.de": (
-        '<p style="font-family:Calibri,Arial,sans-serif;font-size:11pt;margin:0;">'
-        '<b><span style="color:#212121;">Severin Wagner | Operations Manager</span></b></p>'
-        '<p style="font-family:Calibri,Arial,sans-serif;font-size:11pt;margin:0;">&nbsp;</p>'
-        '<p style="font-family:Calibri,Arial,sans-serif;font-size:11pt;margin:0;">'
-        '<a href="tel:+491793922128" style="color:#0078D4;">+49 179 3922 128</a></p>'
-        '<p style="font-family:Calibri,Arial,sans-serif;font-size:11pt;margin:0;color:#212121;">'
-        '<br>mysecurityevent GmbH</p>'
-        '<p style="font-family:Calibri,Arial,sans-serif;font-size:11pt;margin:0;color:#212121;">'
-        'Office: Novalisstra\u00dfe 11</p>'
-        '<p style="font-family:Calibri,Arial,sans-serif;font-size:11pt;margin:0;">'
-        '10115 Berlin\u00a0|\u00a0<a href="tel:+493052284088" style="color:#0078D4;">+49 30 52284088</a></p>'
-        '<p style="font-family:Calibri,Arial,sans-serif;font-size:11pt;margin:0;color:#212121;">'
-        'Amtsgericht Charlottenburg | HRB244080B</p>'
-    ),
-}
+from shared.config import (
+    ConfigError,
+    load_imap_draft_settings,
+    load_smtp_send_settings,
+)
+from shared.smtp_sender import SmtpSendConfig
 from sponsor_deadline_mails import (
     DEFAULT_EVENT_CITY,
     DEFAULT_EVENT_END,
@@ -34,7 +21,9 @@ from sponsor_deadline_mails import (
     DEFAULT_SHEET_NAME,
     ImapDraftConfig,
     build_imap_draft_log_dataframe,
+    build_smtp_send_log_dataframe,
     create_imap_drafts,
+    create_smtp_sends,
     generate_deadline_mails,
     list_workbook_sheets,
 )
@@ -49,13 +38,32 @@ from sponsor_deadline_mails.summary_state import (
 )
 from streamlit_ui import render_email_selectbox, render_page_title
 
+st.set_page_config(page_title="Deadline-E-Mails fuer Sponsoren", layout="wide")
 
-st.set_page_config(page_title="Deadline-E-Mails für Sponsoren", layout="wide")
+_SIGNATURES: dict[str, str] = {
+    "severin.wagner@mysecurityevent.de": (
+        '<p style="font-family:Calibri,Arial,sans-serif;font-size:11pt;margin:0;">'
+        '<b><span style="color:#212121;">Severin Wagner | Operations Manager</span></b></p>'
+        '<p style="font-family:Calibri,Arial,sans-serif;font-size:11pt;margin:0;">&nbsp;</p>'
+        '<p style="font-family:Calibri,Arial,sans-serif;font-size:11pt;margin:0;">'
+        '<a href="tel:+491793922128" style="color:#0078D4;">+49 179 3922 128</a></p>'
+        '<p style="font-family:Calibri,Arial,sans-serif;font-size:11pt;margin:0;color:#212121;">'
+        '<br>mysecurityevent GmbH</p>'
+        '<p style="font-family:Calibri,Arial,sans-serif;font-size:11pt;margin:0;color:#212121;">'
+        "Office: Novalisstrasse 11</p>"
+        '<p style="font-family:Calibri,Arial,sans-serif;font-size:11pt;margin:0;">'
+        '10115 Berlin&nbsp;|&nbsp;<a href="tel:+493052284088" style="color:#0078D4;">+49 30 52284088</a></p>'
+        '<p style="font-family:Calibri,Arial,sans-serif;font-size:11pt;margin:0;color:#212121;">'
+        "Amtsgericht Charlottenburg | HRB244080B</p>"
+    ),
+}
 
 SENDER_EMAIL_SUGGESTIONS = [
     "severin.wagner@mysecurityevent.de",
 ]
 CONFIRM_WORD_DRAFTS = "DRAFTS"
+CONFIRM_WORD_SEND = "SENDEN"
+MAIL_MODE_OPTIONS = ("Entw\u00fcrfe", "Senden")
 
 
 def _init_state() -> None:
@@ -67,9 +75,9 @@ def _init_state() -> None:
         "sdm_summary_view_version": 0,
         "sdm_summary_schema_version": 0,
         "sdm_preview_mail_number": None,
-        "sdm_imap_log_records": None,
-        "sdm_imap_run_context": None,
-        "sdm_imap_run_error": None,
+        "sdm_mail_log_records": None,
+        "sdm_mail_run_context": None,
+        "sdm_mail_run_error": None,
     }
     for key, value in defaults.items():
         st.session_state.setdefault(key, value)
@@ -83,9 +91,9 @@ def _reset_generation_state(file_token: str | None = None) -> None:
     st.session_state["sdm_summary_view_version"] = 0
     st.session_state["sdm_summary_schema_version"] = 0
     st.session_state["sdm_preview_mail_number"] = None
-    st.session_state["sdm_imap_log_records"] = None
-    st.session_state["sdm_imap_run_context"] = None
-    st.session_state["sdm_imap_run_error"] = None
+    st.session_state["sdm_mail_log_records"] = None
+    st.session_state["sdm_mail_run_context"] = None
+    st.session_state["sdm_mail_run_error"] = None
 
 
 @st.cache_data(show_spinner=False)
@@ -96,6 +104,7 @@ def _cached_sheet_names(excel_bytes: bytes) -> list[str]:
 def _make_file_token(file_name: str, excel_bytes: bytes) -> str:
     digest = hashlib.sha1(excel_bytes).hexdigest()
     return f"{file_name}:{len(excel_bytes)}:{digest}"
+
 
 def _load_base_imap_config() -> ImapDraftConfig | None:
     try:
@@ -113,6 +122,23 @@ def _load_base_imap_config() -> ImapDraftConfig | None:
     )
 
 
+def _load_base_smtp_config() -> SmtpSendConfig | None:
+    try:
+        settings = load_smtp_send_settings(st.secrets)
+    except ConfigError:
+        return None
+
+    return SmtpSendConfig(
+        host=settings.host,
+        port=settings.port,
+        username="",
+        password="",
+        use_ssl=settings.use_ssl,
+        use_starttls=settings.use_starttls,
+        timeout_seconds=settings.timeout_seconds,
+    )
+
+
 def _mail_label(mail_number: int, mail) -> str:
     return f"{mail_number} - {mail.sponsor_name} ({mail.to_email})"
 
@@ -125,6 +151,7 @@ def _frag_summary() -> None:
     base_key = f"sdm_summary_base_{view_version}"
     editor_key = f"sdm_summary_editor_{view_version}"
     frozen_base = get_summary_frozen_base(st.session_state, base_key, summary_df)
+    selection_col = frozen_base.columns[0]
     st.data_editor(
         frozen_base,
         key=editor_key,
@@ -133,7 +160,7 @@ def _frag_summary() -> None:
         num_rows="fixed",
         on_change=make_summary_callback(st.session_state, editor_key, frozen_base),
         column_config={
-            "Ausgewählt": st.column_config.CheckboxColumn("Ausgewählt"),
+            selection_col: st.column_config.CheckboxColumn(selection_col),
             "Sponsor": st.column_config.TextColumn("Sponsor", width="medium"),
             "Sprache": st.column_config.TextColumn("Sprache", width="small"),
             "Paket": st.column_config.TextColumn("Paket", width="small"),
@@ -151,16 +178,17 @@ def _frag_summary() -> None:
 _init_state()
 
 base_imap_config = _load_base_imap_config()
+base_smtp_config = _load_base_smtp_config()
 
-render_page_title("Deadline-E-Mails für Sponsoren")
+render_page_title("Deadline-E-Mails fuer Sponsoren")
 st.caption(
-    "Sponsoren-Datei hochladen, E-Mails erstellen, Vorschau prüfen und Entwürfe direkt im Postfach speichern."
+    "Sponsoren-Datei hochladen, E-Mails erstellen, Vorschau pruefen und wahlweise als Entwurf speichern oder senden."
 )
 
-if base_imap_config is None:
+if base_imap_config is None and base_smtp_config is None:
     st.error(
-        "Die Verbindung zum Postfach ist für diese Seite noch nicht eingerichtet. "
-        "Bitte lass die technische Konfiguration prüfen."
+        "Fuer diese Seite ist weder eine IMAP-Draft- noch eine SMTP-Send-Konfiguration eingerichtet. "
+        "Bitte lass die technische Konfiguration pruefen."
     )
     st.stop()
 
@@ -187,7 +215,7 @@ except Exception as exc:
 
 default_sheet_index = sheet_names.index(DEFAULT_SHEET_NAME) if DEFAULT_SHEET_NAME in sheet_names else 0
 
-config_col, date_col, imap_col = st.columns([2, 2, 1.6], gap="large")
+config_col, date_col, cred_col = st.columns([2, 2, 1.6], gap="large")
 with config_col:
     sheet_name = st.selectbox("Excel-Blatt", sheet_names, index=default_sheet_index)
     event_city = st.text_input("Event-Stadt", value=DEFAULT_EVENT_CITY)
@@ -196,25 +224,25 @@ with date_col:
     event_start = st.date_input("Event-Start", value=DEFAULT_EVENT_START)
     event_end = st.date_input("Event-Ende", value=DEFAULT_EVENT_END)
 
-with imap_col:
-    imap_username = render_email_selectbox(
+with cred_col:
+    sender_email = render_email_selectbox(
         "E-Mail-Adresse",
-        help="Mit dieser Adresse werden die Entwürfe in Deinem Postfach gespeichert.",
+        help="Mit dieser Adresse werden Entwuerfe gespeichert oder E-Mails versendet.",
         key="sdm_sender_email",
         suggestions=SENDER_EMAIL_SUGGESTIONS,
         placeholder="vorname.nachname@mysecurityevent.de",
     )
-    imap_password = st.text_input(
+    sender_password = st.text_input(
         "E-Mail-Passwort",
         type="password",
-        help="Das Passwort für dieses Postfach.",
+        help="Das Passwort fuer dieses Postfach.",
     )
     st.markdown("<div style='margin-top: 1.7rem'></div>", unsafe_allow_html=True)
     generate_clicked = st.button("Generieren", type="primary", use_container_width=True)
 
 if generate_clicked:
     if not isinstance(event_start, date) or not isinstance(event_end, date):
-        st.error("Bitte gültige Event-Daten angeben.")
+        st.error("Bitte gueltige Event-Daten angeben.")
     elif event_end < event_start:
         st.error("Das Event-Ende darf nicht vor dem Event-Start liegen.")
     else:
@@ -225,7 +253,7 @@ if generate_clicked:
                 event_city=event_city.strip() or DEFAULT_EVENT_CITY,
                 event_start=event_start,
                 event_end=event_end,
-                signature_html=_SIGNATURES.get(imap_username.strip().lower(), ""),
+                signature_html=_SIGNATURES.get(sender_email.strip().lower(), ""),
             )
         except Exception as exc:
             st.error(f"Generierung fehlgeschlagen: {exc}")
@@ -236,13 +264,13 @@ if generate_clicked:
             st.session_state["sdm_summary_schema_version"] = SUMMARY_SCHEMA_VERSION
             st.session_state["sdm_summary_view_version"] += 1
             st.session_state["sdm_preview_mail_number"] = 1 if result.mails else None
-            st.session_state["sdm_imap_log_records"] = None
-            st.session_state["sdm_imap_run_context"] = None
-            st.session_state["sdm_imap_run_error"] = None
+            st.session_state["sdm_mail_log_records"] = None
+            st.session_state["sdm_mail_run_context"] = None
+            st.session_state["sdm_mail_run_error"] = None
 
 result = st.session_state["sdm_result"]
 if result is None:
-    st.info("Klicke auf 'Generieren', um die E-Mails zu erstellen und vorab zu prüfen.")
+    st.info("Klicke auf 'Generieren', um die E-Mails zu erstellen und vorab zu pruefen.")
     st.stop()
 
 if not result.mails:
@@ -272,7 +300,7 @@ if default_preview_mail_number not in mail_by_number and preview_options:
 with preview_col:
     st.subheader("Vorschau")
     preview_mail_number = st.selectbox(
-        "Sponsor auswählen",
+        "Sponsor auswaehlen",
         options=preview_options,
         key="sdm_preview_mail_number",
         format_func=lambda mail_number: _mail_label(mail_number, mail_by_number[mail_number]),
@@ -288,7 +316,7 @@ with details_col:
     components.html(preview_mail.html_body, height=780, scrolling=True)
 
 st.divider()
-st.subheader("Entwürfe im Postfach")
+st.subheader("Versand")
 
 selected_mails = [
     mail_by_number[mail_number]
@@ -296,108 +324,147 @@ selected_mails = [
     if mail_number in mail_by_number
 ]
 selected_count = len(selected_mails)
-st.caption("Es werden nur die aktuell ausgewählten Sponsoren berücksichtigt.")
-imap_username = imap_username.strip()
-drafts_folder = base_imap_config.drafts_folder.strip()
-expected_draft_confirmation = f"{CONFIRM_WORD_DRAFTS} {selected_count}"
+st.caption("Es werden nur die aktuell ausgewaehlten Sponsoren beruecksichtigt.")
 
-if not imap_username:
+mail_mode = st.radio(
+    "Modus",
+    options=MAIL_MODE_OPTIONS,
+    index=0,
+    horizontal=True,
+    key="sdm_mail_mode",
+)
+is_send_mode = mail_mode == "Senden"
+expected_confirmation = f"{CONFIRM_WORD_SEND if is_send_mode else CONFIRM_WORD_DRAFTS} {selected_count}"
+
+sender_email = sender_email.strip()
+
+if not sender_email:
     st.warning("Bitte gib Deine E-Mail-Adresse ein.")
-elif not imap_password:
+elif not sender_password:
     st.warning("Bitte gib Dein E-Mail-Passwort ein.")
-elif not drafts_folder.strip():
-    st.error("Der Ordner für Entwürfe ist aktuell nicht richtig eingerichtet. Bitte lass die Konfiguration prüfen.")
+elif is_send_mode and base_smtp_config is None:
+    st.error("SMTP-Senden ist aktuell nicht eingerichtet. Bitte `mse_smtp_mail_send` pruefen.")
+elif (not is_send_mode) and base_imap_config is None:
+    st.error("IMAP-Drafts sind aktuell nicht eingerichtet. Bitte `mse_imap_mail_drafts` pruefen.")
+elif (not is_send_mode) and not base_imap_config.drafts_folder.strip():
+    st.error("Der Ordner fuer Entwuerfe ist aktuell nicht richtig eingerichtet. Bitte lass die Konfiguration pruefen.")
 elif not selected_mails:
-    st.warning("Bitte mindestens einen Sponsor in der Tabelle auswählen.")
+    st.warning("Bitte mindestens einen Sponsor in der Tabelle auswaehlen.")
 else:
-    st.info("Die Entwürfe werden in Deinem Postfach gespeichert.")
-    draft_confirm_text = st.text_input(
-        f"Bestätigung: Bitte exakt {expected_draft_confirmation} eintippen",
-        value="",
-        help=(
-            "Damit nicht versehentlich Entwürfe erzeugt werden. "
-            f"Erwartet wird exakt: {expected_draft_confirmation}"
-        ),
-    )
-    allow_draft_run = draft_confirm_text.strip() == expected_draft_confirmation
-    if not allow_draft_run:
-        st.warning(f"Zum Speichern bitte exakt {expected_draft_confirmation} eingeben.")
+    if is_send_mode:
+        st.info("Die ausgewaehlten E-Mails werden direkt per SMTP versendet.")
+    else:
+        st.info("Die Entwuerfe werden in Deinem Postfach gespeichert.")
 
+    confirm_text = st.text_input(
+        f"Bestaetigung: Bitte exakt {expected_confirmation} eintippen",
+        value="",
+        help=f"Erwartet wird exakt: {expected_confirmation}",
+    )
+    allow_run = confirm_text.strip() == expected_confirmation
+    if not allow_run:
+        st.warning(f"Zum Ausfuehren bitte exakt {expected_confirmation} eingeben.")
+
+    button_label = "Ausgewaehlte E-Mails senden" if is_send_mode else "Ausgewaehlte Entwuerfe speichern"
     if st.button(
-        "Ausgewählte Entwürfe speichern",
+        button_label,
         type="primary",
         use_container_width=True,
-        disabled=not allow_draft_run,
+        disabled=not allow_run,
     ):
         run_started_utc = datetime.now(timezone.utc)
         run_context = {
             "Run-ID": f"SDM-{run_started_utc.strftime('%Y%m%dT%H%M%SZ')}-{uuid4().hex[:8]}",
-            "Modus": "DRAFTS",
+            "Modus": "SENDEN" if is_send_mode else "DRAFTS",
             "Zeitpunkt UTC": run_started_utc.replace(microsecond=0).isoformat().replace("+00:00", "Z"),
-            "Ausgewählte Mails": selected_count,
+            "Ausgewaehlte Mails": selected_count,
             "Sheet": sheet_name,
             "Event": f"{event_city.strip() or DEFAULT_EVENT_CITY} | {event_start.isoformat()} bis {event_end.isoformat()}",
-            "Sender": imap_username,
+            "Sender": sender_email,
         }
-        st.session_state["sdm_imap_log_records"] = None
-        st.session_state["sdm_imap_run_context"] = run_context
-        st.session_state["sdm_imap_run_error"] = None
+        st.session_state["sdm_mail_log_records"] = None
+        st.session_state["sdm_mail_run_context"] = run_context
+        st.session_state["sdm_mail_run_error"] = None
         try:
-            records = create_imap_drafts(
-                selected_mails,
-                ImapDraftConfig(
-                    host=base_imap_config.host,
-                    port=base_imap_config.port,
-                    username=imap_username,
-                    password=imap_password,
-                    drafts_folder=drafts_folder,
-                    use_ssl=base_imap_config.use_ssl,
-                ),
-            )
+            if is_send_mode:
+                records = create_smtp_sends(
+                    selected_mails,
+                    SmtpSendConfig(
+                        host=base_smtp_config.host,
+                        port=base_smtp_config.port,
+                        username=sender_email,
+                        password=sender_password,
+                        use_ssl=base_smtp_config.use_ssl,
+                        use_starttls=base_smtp_config.use_starttls,
+                        timeout_seconds=base_smtp_config.timeout_seconds,
+                    ),
+                )
+            else:
+                records = create_imap_drafts(
+                    selected_mails,
+                    ImapDraftConfig(
+                        host=base_imap_config.host,
+                        port=base_imap_config.port,
+                        username=sender_email,
+                        password=sender_password,
+                        drafts_folder=base_imap_config.drafts_folder,
+                        use_ssl=base_imap_config.use_ssl,
+                    ),
+                )
         except Exception as exc:
-            st.session_state["sdm_imap_run_error"] = str(exc)
-            st.error(f"Die Entwürfe konnten nicht gespeichert werden: {exc}")
+            st.session_state["sdm_mail_run_error"] = str(exc)
+            st.error(
+                f"{'Die E-Mails konnten nicht gesendet werden' if is_send_mode else 'Die Entwuerfe konnten nicht gespeichert werden'}: {exc}"
+            )
         else:
-            st.session_state["sdm_imap_log_records"] = records
-            success_count = sum(record.result == "draft_created" for record in records)
+            st.session_state["sdm_mail_log_records"] = records
+            success_status = "sent" if is_send_mode else "draft_created"
+            success_count = sum(record.result == success_status for record in records)
             error_count = sum(record.result == "error" for record in records)
             if error_count:
-                st.warning(f"Entwürfe gespeichert: {success_count}, Fehler: {error_count}")
+                st.warning(
+                    f"{'Gesendet' if is_send_mode else 'Entwuerfe gespeichert'}: {success_count}, Fehler: {error_count}"
+                )
             else:
-                st.success(f"Entwürfe gespeichert: {success_count}")
+                st.success(f"{'Gesendet' if is_send_mode else 'Entwuerfe gespeichert'}: {success_count}")
 
-imap_log_records = st.session_state.get("sdm_imap_log_records")
-imap_run_context = st.session_state.get("sdm_imap_run_context")
-imap_run_error = st.session_state.get("sdm_imap_run_error")
-if imap_log_records or imap_run_error:
+mail_log_records = st.session_state.get("sdm_mail_log_records")
+mail_run_context = st.session_state.get("sdm_mail_run_context")
+mail_run_error = st.session_state.get("sdm_mail_run_error")
+if mail_log_records or mail_run_error:
     st.divider()
     st.subheader("Ergebnis")
 
-    if imap_log_records:
-        total_count = len(imap_log_records)
-        success_count = sum(record.result == "draft_created" for record in imap_log_records)
+    mode_label = (mail_run_context or {}).get("Modus", "DRAFTS")
+    success_status = "sent" if mode_label == "SENDEN" else "draft_created"
+    if mail_log_records:
+        total_count = len(mail_log_records)
+        success_count = sum(record.result == success_status for record in mail_log_records)
         error_count = total_count - success_count
     else:
-        total_count = int((imap_run_context or {}).get("Ausgewählte Mails", 0))
+        total_count = int((mail_run_context or {}).get("Ausgewaehlte Mails", 0))
         success_count = 0
         error_count = total_count
 
     st.write(
-        f"Ergebnisübersicht: Gesamt: **{total_count}** · "
+        f"Ergebnisuebersicht: Gesamt: **{total_count}** · "
         f"Erfolgreich: **{success_count}** · "
         f"Fehler: **{error_count}**"
     )
 
-    if imap_log_records:
-        result_df = build_imap_draft_log_dataframe(imap_log_records)
-        for column, value in (imap_run_context or {}).items():
+    if mail_log_records:
+        if mode_label == "SENDEN":
+            result_df = build_smtp_send_log_dataframe(mail_log_records)
+        else:
+            result_df = build_imap_draft_log_dataframe(mail_log_records)
+        for column, value in (mail_run_context or {}).items():
             result_df[column] = value
     else:
         error_row = {
             "Status": "Fehler",
-            "Hinweis": imap_run_error or "-",
+            "Hinweis": mail_run_error or "-",
         }
-        for column, value in (imap_run_context or {}).items():
+        for column, value in (mail_run_context or {}).items():
             error_row[column] = value
         result_df = pd.DataFrame([error_row])
 

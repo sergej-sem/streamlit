@@ -6,6 +6,7 @@ from shared.config import (
     is_live_user_creation_enabled,
     load_graph_bulk_user_settings,
     load_imap_draft_settings,
+    load_smtp_send_settings,
     parse_bool,
 )
 
@@ -166,6 +167,59 @@ class ImapDraftConfigTests(unittest.TestCase):
         secrets = {"mse_imap_mail_drafts": {"host": "imap.example.org", "port": "abc"}}
         with self.assertRaisesRegex(ConfigError, "mse_imap_mail_drafts.port"):
             load_imap_draft_settings(secrets)
+
+
+class SmtpSendConfigTests(unittest.TestCase):
+    def test_loads_valid_settings(self):
+        secrets = {
+            "mse_smtp_mail_send": {
+                "host": "smtp.example.org",
+                "port": "587",
+                "use_ssl": "false",
+                "use_starttls": "true",
+                "timeout_seconds": "45",
+            }
+        }
+        settings = load_smtp_send_settings(secrets)
+        self.assertEqual(settings.host, "smtp.example.org")
+        self.assertEqual(settings.port, 587)
+        self.assertFalse(settings.use_ssl)
+        self.assertTrue(settings.use_starttls)
+        self.assertEqual(settings.timeout_seconds, 45)
+
+    def test_applies_defaults(self):
+        settings = load_smtp_send_settings({"mse_smtp_mail_send": {"host": "smtp.example.org"}})
+        self.assertEqual(settings.port, 465)
+        self.assertTrue(settings.use_ssl)
+        self.assertFalse(settings.use_starttls)
+        self.assertEqual(settings.timeout_seconds, 30)
+
+    def test_missing_section_raises(self):
+        with self.assertRaisesRegex(ConfigError, "mse_smtp_mail_send"):
+            load_smtp_send_settings({})
+
+    def test_invalid_port_raises(self):
+        secrets = {"mse_smtp_mail_send": {"host": "smtp.example.org", "port": "abc"}}
+        with self.assertRaisesRegex(ConfigError, "mse_smtp_mail_send.port"):
+            load_smtp_send_settings(secrets)
+
+    def test_invalid_timeout_raises(self):
+        secrets = {
+            "mse_smtp_mail_send": {"host": "smtp.example.org", "timeout_seconds": "0"}
+        }
+        with self.assertRaisesRegex(ConfigError, "mse_smtp_mail_send.timeout_seconds"):
+            load_smtp_send_settings(secrets)
+
+    def test_ssl_and_starttls_cannot_both_be_true(self):
+        secrets = {
+            "mse_smtp_mail_send": {
+                "host": "smtp.example.org",
+                "use_ssl": True,
+                "use_starttls": True,
+            }
+        }
+        with self.assertRaisesRegex(ConfigError, "use_ssl.*use_starttls"):
+            load_smtp_send_settings(secrets)
 
 
 if __name__ == "__main__":
