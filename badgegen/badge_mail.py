@@ -45,7 +45,7 @@ def build_badge_mails(
     *,
     uppercase_names: bool = True,
     uppercase_company: bool = True,
-    colored_qr: bool = False,
+    colored_qr: bool = True,
 ) -> tuple[list[SerienMail], list[dict]]:
     """Build one SerienMail per person with their badge PDF as attachment.
 
@@ -116,7 +116,7 @@ def build_badge_notification_mails(
     *,
     uppercase_names: bool = True,
     uppercase_company: bool = True,
-    colored_qr: bool = False,
+    colored_qr: bool = True,
 ) -> tuple[list[SerienMail], list[dict]]:
     """Build one notification draft per person with their badge PDF as attachment."""
     mails: list[SerienMail] = []

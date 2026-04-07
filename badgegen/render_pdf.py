@@ -333,7 +333,7 @@ def render_badges_pdf_bytes(
     *,
     uppercase_names: bool,
     uppercase_company: bool,
-    colored_qr: bool = False,
+    colored_qr: bool = True,
 ) -> bytes:
     buf = BytesIO()
     c = canvas.Canvas(buf, pagesize=(A6_W, A6_H))

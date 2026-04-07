@@ -407,11 +407,11 @@ class RenderBadgesPdfBytesTests(unittest.TestCase):
             "print_record_id wurde nicht vollständig aus der Signatur entfernt"
         )
 
-    # --- colored_qr: Default False, valides PDF ---
+    # --- colored_qr: Default True, valides PDF ---
 
-    def test_colored_qr_default_false_produces_valid_pdf(self):
+    def test_colored_qr_default_true_produces_valid_pdf(self):
         row = self._make_row("Max", "Mustermann", "CEO", "ACME")
-        result = self._render([row])  # colored_qr nicht übergeben → Default False
+        result = self._render([row])  # colored_qr nicht übergeben → Default True
         self.assertTrue(result.startswith(b"%PDF"))
 
     def test_colored_qr_true_all_categories_no_crash(self):
@@ -427,12 +427,12 @@ class RenderBadgesPdfBytesTests(unittest.TestCase):
                 )
                 self.assertTrue(result.startswith(b"%PDF"), f"Kein valides PDF für Kategorie {cat}")
 
-    def test_colored_qr_parameter_has_default_false(self):
+    def test_colored_qr_parameter_has_default_true(self):
         import inspect
         sig = inspect.signature(render_badges_pdf_bytes)
         param = sig.parameters.get("colored_qr")
         self.assertIsNotNone(param, "colored_qr-Parameter fehlt in render_badges_pdf_bytes")
-        self.assertIs(param.default, False)
+        self.assertIs(param.default, True)
 
 
 # ---------------------------------------------------------------------------

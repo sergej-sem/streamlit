@@ -146,14 +146,12 @@ def _build_pdf_cached(
     tpl_map: Dict[str, str],
     uppercase_names: bool,
     uppercase_company: bool,
-    colored_qr: bool,
 ) -> bytes:
     return render_badges_pdf_bytes(
         rows=df_out.to_dict("records"),
         template_by_category=tpl_map,
         uppercase_names=uppercase_names,
         uppercase_company=uppercase_company,
-        colored_qr=colored_qr,
     )
 
 
@@ -161,6 +159,7 @@ def _build_pdf_cached(
 enable_autofill = True
 uppercase_names = True
 uppercase_company = True
+colored_qr = True
 tpl_map = dict(DEFAULT_TEMPLATES)
 _bg_init_notification_settings()
 
@@ -173,10 +172,7 @@ event_tag = st.selectbox(
     label_visibility="collapsed",
 )
 
-col_filters, col_settings = st.columns([0.68, 0.32], gap="large")
-
-with col_settings:
-    colored_qr = st.checkbox("Farbige QR-Codes", value=False)
+col_filters, _ = st.columns([0.68, 0.32], gap="large")
 
 with col_filters:
     historie_opts = _cached_historie_options()
@@ -337,7 +333,6 @@ with st.spinner("PDF wird vorbereitet …"):
             tpl_map=tpl_map,
             uppercase_names=uppercase_names,
             uppercase_company=uppercase_company,
-            colored_qr=colored_qr,
         )
     except Exception as e:
         st.error(f"❌ PDF-Erstellung fehlgeschlagen: {e}")
