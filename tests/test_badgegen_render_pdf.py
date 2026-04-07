@@ -47,6 +47,7 @@ from badgegen.render_pdf import (
     _wrap_words,
     JOBTITLE_GAP_MIN,
     JOBTITLE_GAP_TARGET,
+    _normalize_badge_text,
     render_badges_pdf_bytes,
 )
 from reportlab.lib.units import mm
@@ -59,6 +60,64 @@ from reportlab.lib.units import mm
 def _make_canvas() -> rl_canvas.Canvas:
     buf = io.BytesIO()
     return rl_canvas.Canvas(buf)
+
+
+class BadgeFontRegistrationTests(unittest.TestCase):
+
+    def test_repo_badge_fonts_are_registered(self):
+        self.assertEqual("BadgeHeavy", render_pdf_module._FONT_HEAVY)
+        self.assertEqual("BadgeRegular", render_pdf_module._FONT_REGULAR)
+
+    def test_repo_badge_font_files_exist(self):
+        repo_root = os.path.normpath(os.path.join(os.path.dirname(__file__), ".."))
+        self.assertTrue(os.path.isfile(os.path.join(repo_root, "assets", "fonts", "Badge-Heavy.ttf")))
+        self.assertTrue(os.path.isfile(os.path.join(repo_root, "assets", "fonts", "Badge-Regular.ttf")))
+
+
+class BadgeTextNormalizationTests(unittest.TestCase):
+
+    def test_normalize_badge_text_compose_umlauts(self):
+        self.assertEqual("GÖRGÜLÜ", _normalize_badge_text("GO\u0308RGU\u0308LU\u0308"))
+        self.assertEqual("Müller", _normalize_badge_text("Mu\u0308ller"))
+        self.assertEqual("für", _normalize_badge_text("fu\u0308r"))
+
+    def test_render_normalizes_combining_umlauts_before_drawing(self):
+        import tempfile
+        from PIL import Image as _PilImage
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tpl_path = os.path.join(tmpdir, "dummy.png")
+            img = _PilImage.new("RGB", (10, 10), color=(255, 255, 255))
+            img.save(tpl_path, format="PNG")
+            tpl_map = {cat: tpl_path for cat in TEMPLATE_CATEGORIES}
+
+            row = {
+                "id": "1",
+                "firstname": "Kemal",
+                "lastname": "GO\u0308RGU\u0308LU\u0308",
+                "jobtitle": "Chief Technology Officer",
+                "company": "ARTE",
+                "kategorie": "TN",
+            }
+
+            original_draw = render_pdf_module._draw_centered_lines_in_box
+            draw_calls: list[list[str]] = []
+
+            def tracking_draw(*args, **kwargs):
+                draw_calls.append(list(args[1]))
+                return original_draw(*args, **kwargs)
+
+            with patch("badgegen.render_pdf._draw_centered_lines_in_box", side_effect=tracking_draw):
+                result = render_badges_pdf_bytes(
+                    rows=[row],
+                    template_by_category=tpl_map,
+                    uppercase_names=False,
+                    uppercase_company=False,
+                    colored_qr=True,
+                )
+
+            self.assertTrue(result.startswith(b"%PDF"))
+            self.assertIn(["GÖRGÜLÜ"], draw_calls)
 
 
 # ---------------------------------------------------------------------------

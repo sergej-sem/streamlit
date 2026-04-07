@@ -2,6 +2,7 @@
 
 import os
 import re
+import unicodedata
 from io import BytesIO
 from typing import Dict, Any, List, Tuple
 
@@ -58,7 +59,7 @@ def _qr_color_for_category(kategorie: str, colored: bool) -> object:
 # Font-Registrierung mit Fallback-Kette
 #
 # Priorität:
-#   1. assets/fonts/ im Projekt-Repo (z. B. selbst abgelegte TTF-Dateien)
+#   1. assets/fonts/ im Projekt-Repo (gebündelte Badge-Fonts für stabile Unicode-Darstellung)
 #   2. Windows-Systemfonts (Arial Bold / Arial Regular)
 #   3. ReportLab-eigene gebündelte Fonts (Vera Bold / Vera Regular)
 #   4. Built-in-Fallback: Helvetica-Bold / Helvetica (immer verfügbar)
@@ -115,6 +116,15 @@ def _register_badge_fonts() -> tuple[str, str]:
         regular = "BadgeRegular"
 
     return heavy, regular
+
+
+def _normalize_badge_text(value: str | None) -> str:
+    text = (value or "").strip()
+    if not text:
+        return ""
+    # NFC folds decomposed sequences like "O\u0308" into precomposed glyphs like "Ö".
+    # That keeps umlauts stable across local Windows fonts and Linux/Cloud fallbacks.
+    return unicodedata.normalize("NFC", text)
 
 
 _FONT_HEAVY, _FONT_REGULAR = _register_badge_fonts()
@@ -356,10 +366,10 @@ def render_badges_pdf_bytes(
 
         c.drawImage(ImageReader(tpl), 0, 0, width=A6_W, height=A6_H, mask="auto")
 
-        firstname = (r.get("firstname") or "").strip()
-        lastname  = (r.get("lastname")  or "").strip()
-        jobtitle  = (r.get("jobtitle")  or "").strip()
-        company   = (r.get("company")   or "").strip()
+        firstname = _normalize_badge_text(r.get("firstname"))
+        lastname  = _normalize_badge_text(r.get("lastname"))
+        jobtitle  = _normalize_badge_text(r.get("jobtitle"))
+        company   = _normalize_badge_text(r.get("company"))
         record_id = str(r.get("id") or "").strip()
 
         if uppercase_names:
