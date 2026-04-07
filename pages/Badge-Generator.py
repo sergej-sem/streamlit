@@ -360,6 +360,7 @@ else:
             placeholder="vorname.nachname@mysecurityevent.de",
             on_change=_bg_persist_notification_settings,
         )
+        bg_notify_pass = st.text_input("Passwort", type="password", key="bg_notify_imap_pass")
         bg_notify_recipient = render_email_selectbox(
             "E-Mail-Adresse (Empfänger)",
             key="bg_notify_recipient_email",
@@ -367,13 +368,6 @@ else:
             placeholder=DEFAULT_BADGE_NOTIFICATION_RECIPIENT,
             on_change=_bg_persist_notification_settings,
         )
-
-        st.caption(
-            "Für jeden Badge wird ein eigener Entwurf an die konfigurierte Empfängeradresse "
-            "erzeugt. Das jeweilige Badge-PDF ist individuell angehängt."
-        )
-
-        bg_notify_pass = st.text_input("Passwort", type="password", key="bg_notify_imap_pass")
 
         if not bg_notify_imap_host:
             st.warning("IMAP-Draft-Konfiguration fehlt. Bitte `mse_imap_mail_drafts` in den Secrets prüfen.")
