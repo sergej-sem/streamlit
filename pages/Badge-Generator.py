@@ -59,6 +59,9 @@ _BG_CONFIRM_WORD  = "ENTWÜRFE"
 _BG_DEFAULT_SUBJECT = "Dein Badge – {vorname}"
 _BG_DEFAULT_BODY    = "anbei finden Sie Ihren persönlichen Badge für die Veranstaltung."
 _BG_DEFAULT_EVENT_TAG = "26BER"
+_BG_NOTIFY_SAVED_EMAIL_ENABLED_KEY = "_bg_notify_saved_email_enabled"
+_BG_NOTIFY_SAVED_SENDER_KEY = "_bg_notify_saved_sender_email"
+_BG_NOTIFY_SAVED_RECIPIENT_KEY = "_bg_notify_saved_recipient_email"
 
 def _bg_load_imap_defaults() -> tuple[str, int, str, bool]:
     try:
@@ -73,19 +76,52 @@ def _bg_init_notification_settings() -> None:
         return
 
     settings = load_badge_notification_settings(_BG_NOTIFY_SETTINGS_PATH)
-    st.session_state.setdefault("bg_notify_email_enabled", settings.email_enabled)
-    st.session_state.setdefault("bg_notify_sender_email", settings.sender_email)
-    st.session_state.setdefault("bg_notify_recipient_email", settings.recipient_email)
+    st.session_state.setdefault(_BG_NOTIFY_SAVED_EMAIL_ENABLED_KEY, settings.email_enabled)
+    st.session_state.setdefault(_BG_NOTIFY_SAVED_SENDER_KEY, settings.sender_email)
+    st.session_state.setdefault(_BG_NOTIFY_SAVED_RECIPIENT_KEY, settings.recipient_email)
     st.session_state["_bg_notify_settings_loaded"] = True
 
 
+def _bg_sync_notification_widget_defaults() -> None:
+    st.session_state.setdefault(
+        "bg_notify_email_enabled",
+        bool(st.session_state.get(_BG_NOTIFY_SAVED_EMAIL_ENABLED_KEY, False)),
+    )
+    st.session_state.setdefault(
+        "bg_notify_sender_email",
+        (st.session_state.get(_BG_NOTIFY_SAVED_SENDER_KEY) or "").strip(),
+    )
+    st.session_state.setdefault(
+        "bg_notify_recipient_email",
+        (st.session_state.get(_BG_NOTIFY_SAVED_RECIPIENT_KEY) or "").strip() or DEFAULT_BADGE_NOTIFICATION_RECIPIENT,
+    )
+
+
+def _bg_reset_notification_widget_state() -> None:
+    for key in (
+        "bg_notify_email_enabled",
+        "bg_notify_sender_email",
+        "bg_notify_imap_pass",
+        "bg_notify_recipient_email",
+    ):
+        st.session_state.pop(key, None)
+
+
 def _bg_persist_notification_settings() -> None:
+    email_enabled = bool(st.session_state.get("bg_notify_email_enabled"))
+    sender_email = (st.session_state.get("bg_notify_sender_email") or "").strip()
+    recipient_email = (st.session_state.get("bg_notify_recipient_email") or "").strip() or DEFAULT_BADGE_NOTIFICATION_RECIPIENT
+
+    st.session_state[_BG_NOTIFY_SAVED_EMAIL_ENABLED_KEY] = email_enabled
+    st.session_state[_BG_NOTIFY_SAVED_SENDER_KEY] = sender_email
+    st.session_state[_BG_NOTIFY_SAVED_RECIPIENT_KEY] = recipient_email
+
     save_badge_notification_settings(
         _BG_NOTIFY_SETTINGS_PATH,
         BadgeNotificationSettings(
-            email_enabled=bool(st.session_state.get("bg_notify_email_enabled")),
-            sender_email=(st.session_state.get("bg_notify_sender_email") or "").strip(),
-            recipient_email=(st.session_state.get("bg_notify_recipient_email") or "").strip() or DEFAULT_BADGE_NOTIFICATION_RECIPIENT,
+            email_enabled=email_enabled,
+            sender_email=sender_email,
+            recipient_email=recipient_email,
         ),
     )
 
@@ -291,6 +327,7 @@ current_sig = (
 if st.session_state.get("badges_pdf_sig") != current_sig:
     st.session_state["badges_pdf_sig"] = current_sig
     st.session_state["badges_pdf_downloaded"] = False
+    _bg_reset_notification_widget_state()
     st.session_state["bg_notify_result"] = None
 
 with st.spinner("PDF wird vorbereitet …"):
@@ -340,6 +377,8 @@ if not st.session_state.get("badges_pdf_downloaded"):
         "aktuell ausgewählten Teilnehmer zur Verfügung."
     )
 else:
+    _bg_sync_notification_widget_defaults()
+
     st.markdown(
         f"Diese Entwürfe beziehen sich auf die aktuelle Badge-Auswahl: "
         f"**{n_badge_notifications}** Teilnehmer-Badge(s)."
