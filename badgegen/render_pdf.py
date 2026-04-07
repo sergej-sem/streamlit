@@ -75,11 +75,7 @@ def _find_first_existing(*paths: str) -> str | None:
     return None
 
 
-def _register_badge_fonts() -> tuple[str, str]:
-    """
-    Registriert die beste verfügbare Bold/Regular Sans-Serif-Kombination.
-    Gibt (heavy_font_name, regular_font_name) zurück.
-    """
+def _badge_font_paths() -> tuple[str | None, str | None]:
     # Repo-Root: render_pdf.py liegt in badgegen/, Root ist eine Ebene höher
     _repo_root = os.path.normpath(os.path.join(os.path.dirname(__file__), ".."))
     _repo_fonts = os.path.join(_repo_root, "assets", "fonts")
@@ -104,18 +100,39 @@ def _register_badge_fonts() -> tuple[str, str]:
         os.path.join(_win_fonts, "arial.ttf"),
         os.path.join(_rl_fonts, "Vera.ttf"),
     )
+    return heavy_path, regular_path
+
+
+def _register_badge_fonts() -> tuple[str, str]:
+    """
+    Registriert die beste verfügbare Bold/Regular Sans-Serif-Kombination.
+    Gibt (heavy_font_name, regular_font_name) zurück.
+    """
+    heavy_path, regular_path = _badge_font_paths()
 
     heavy = "Helvetica-Bold"
     regular = "Helvetica"
 
     if heavy_path:
-        pdfmetrics.registerFont(TTFont("BadgeHeavy", heavy_path))
+        if "BadgeHeavy" not in pdfmetrics.getRegisteredFontNames():
+            pdfmetrics.registerFont(TTFont("BadgeHeavy", heavy_path))
         heavy = "BadgeHeavy"
     if regular_path:
-        pdfmetrics.registerFont(TTFont("BadgeRegular", regular_path))
+        if "BadgeRegular" not in pdfmetrics.getRegisteredFontNames():
+            pdfmetrics.registerFont(TTFont("BadgeRegular", regular_path))
         regular = "BadgeRegular"
 
     return heavy, regular
+
+
+def badge_font_cache_token() -> tuple[str, int, str, int]:
+    heavy_path, regular_path = _badge_font_paths()
+    return (
+        heavy_path or "",
+        int(os.path.getmtime(heavy_path)) if heavy_path and os.path.exists(heavy_path) else 0,
+        regular_path or "",
+        int(os.path.getmtime(regular_path)) if regular_path and os.path.exists(regular_path) else 0,
+    )
 
 
 def _normalize_badge_text(value: str | None) -> str:
@@ -133,6 +150,22 @@ FONT_NAME_FIRST   = _FONT_HEAVY
 FONT_NAME_LAST    = _FONT_HEAVY
 FONT_NAME_COMPANY = _FONT_HEAVY
 FONT_NAME_JOB     = _FONT_REGULAR
+
+
+def _refresh_registered_badge_fonts() -> None:
+    global _FONT_HEAVY, _FONT_REGULAR
+    global FONT_NAME_FIRST, FONT_NAME_LAST, FONT_NAME_COMPANY, FONT_NAME_JOB
+
+    heavy, regular = _register_badge_fonts()
+    if heavy == _FONT_HEAVY and regular == _FONT_REGULAR:
+        return
+
+    _FONT_HEAVY = heavy
+    _FONT_REGULAR = regular
+    FONT_NAME_FIRST = heavy
+    FONT_NAME_LAST = heavy
+    FONT_NAME_COMPANY = heavy
+    FONT_NAME_JOB = regular
 
 FONT_SIZE_FIRST_MAX   = 52
 FONT_SIZE_LAST_MAX    = 48
@@ -345,6 +378,8 @@ def render_badges_pdf_bytes(
     uppercase_company: bool,
     colored_qr: bool = True,
 ) -> bytes:
+    _refresh_registered_badge_fonts()
+
     buf = BytesIO()
     c = canvas.Canvas(buf, pagesize=(A6_W, A6_H))
 

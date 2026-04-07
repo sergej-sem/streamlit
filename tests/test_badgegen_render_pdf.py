@@ -47,6 +47,7 @@ from badgegen.render_pdf import (
     _wrap_words,
     JOBTITLE_GAP_MIN,
     JOBTITLE_GAP_TARGET,
+    badge_font_cache_token,
     _normalize_badge_text,
     render_badges_pdf_bytes,
 )
@@ -72,6 +73,13 @@ class BadgeFontRegistrationTests(unittest.TestCase):
         repo_root = os.path.normpath(os.path.join(os.path.dirname(__file__), ".."))
         self.assertTrue(os.path.isfile(os.path.join(repo_root, "assets", "fonts", "Badge-Heavy.ttf")))
         self.assertTrue(os.path.isfile(os.path.join(repo_root, "assets", "fonts", "Badge-Regular.ttf")))
+
+    def test_badge_font_cache_token_uses_repo_fonts(self):
+        heavy_path, heavy_mtime, regular_path, regular_mtime = badge_font_cache_token()
+        self.assertTrue(heavy_path.endswith(os.path.join("assets", "fonts", "Badge-Heavy.ttf")))
+        self.assertTrue(regular_path.endswith(os.path.join("assets", "fonts", "Badge-Regular.ttf")))
+        self.assertGreater(heavy_mtime, 0)
+        self.assertGreater(regular_mtime, 0)
 
 
 class BadgeTextNormalizationTests(unittest.TestCase):

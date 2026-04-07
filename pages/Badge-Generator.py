@@ -13,7 +13,7 @@ from badgegen.hubspot_search import (
 )
 from badgegen.historie_options import fetch_historie_options
 from badgegen.category import derive_kategorie_from_historie, ALLOWED_CATEGORIES, EVENT_TAGS
-from badgegen.render_pdf import render_badges_pdf_bytes
+from badgegen.render_pdf import badge_font_cache_token, render_badges_pdf_bytes
 from badgegen.filter_builder import render_filter_builder
 from serienmailing.imap_sender import MailConfig, create_serienmailing_drafts
 from serienmailing.mail_builder import (
@@ -146,6 +146,7 @@ def _build_pdf_cached(
     tpl_map: Dict[str, str],
     uppercase_names: bool,
     uppercase_company: bool,
+    render_cache_token: tuple[str, int, str, int],
 ) -> bytes:
     return render_badges_pdf_bytes(
         rows=df_out.to_dict("records"),
@@ -333,6 +334,7 @@ with st.spinner("PDF wird vorbereitet …"):
             tpl_map=tpl_map,
             uppercase_names=uppercase_names,
             uppercase_company=uppercase_company,
+            render_cache_token=badge_font_cache_token(),
         )
     except Exception as e:
         st.error(f"❌ PDF-Erstellung fehlgeschlagen: {e}")
