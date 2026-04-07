@@ -30,6 +30,7 @@ from shared.config import (
     load_imap_draft_settings,
     load_smtp_send_settings,
 )
+from shared.imap_append import ImapAppendConfig
 from shared.smtp_sender import SmtpSendConfig
 from badgegen.notification_settings import (
     BadgeNotificationSettings,
@@ -73,12 +74,12 @@ _BG_CONFIRM_WORD_DRAFT = "ENTW\u00dcRFE"
 _BG_CONFIRM_WORD_SEND = "SENDEN"
 _BG_MAIL_MODE_OPTIONS = ("Entw\u00fcrfe", "Senden")
 
-def _bg_load_imap_defaults() -> tuple[str, int, str, bool]:
+def _bg_load_imap_defaults() -> tuple[str, int, str, str, bool]:
     try:
         s = load_imap_draft_settings(st.secrets)
-        return s.host, s.port, s.drafts_folder, s.use_ssl
+        return s.host, s.port, s.drafts_folder, s.sent_folder, s.use_ssl
     except ConfigError:
-        return "", 993, "Drafts", True
+        return "", 993, "Drafts", "INBOX.Sent", True
 
 
 def _bg_load_smtp_defaults() -> tuple[str, int, bool, bool, int]:
@@ -406,7 +407,7 @@ else:
         f"**{n_badge_notifications}** Teilnehmer-Badge(s)."
     )
 
-    bg_notify_imap_host, bg_notify_imap_port, bg_notify_imap_folder, bg_notify_imap_ssl = _bg_load_imap_defaults()
+    bg_notify_imap_host, bg_notify_imap_port, bg_notify_imap_folder, bg_notify_imap_sent_folder, bg_notify_imap_ssl = _bg_load_imap_defaults()
     bg_notify_smtp_host, bg_notify_smtp_port, bg_notify_smtp_ssl, bg_notify_smtp_starttls, bg_notify_smtp_timeout = _bg_load_smtp_defaults()
     bg_notify_enabled = st.checkbox(
         "E-Mail",
@@ -442,6 +443,8 @@ else:
 
         if bg_notify_is_send_mode and not bg_notify_smtp_host:
             st.warning("SMTP-Konfiguration fehlt. Bitte `mse_smtp_mail_send` in den Secrets pruefen.")
+        elif bg_notify_is_send_mode and not bg_notify_imap_host:
+            st.warning("IMAP-Konfiguration fuer die Sent-Kopie fehlt. Bitte `mse_imap_mail_drafts` in den Secrets pruefen.")
         elif (not bg_notify_is_send_mode) and not bg_notify_imap_host:
             st.warning("IMAP-Draft-Konfiguration fehlt. Bitte `mse_imap_mail_drafts` in den Secrets pruefen.")
 
@@ -461,6 +464,7 @@ else:
             and bool(bg_notify_recipient)
             and bool(bg_notify_pass)
             and bool(bg_notify_smtp_host if bg_notify_is_send_mode else bg_notify_imap_host)
+            and bool(bg_notify_imap_host if bg_notify_is_send_mode else True)
             and bg_notify_confirmed
         )
 
@@ -494,6 +498,14 @@ else:
                                     use_ssl=bg_notify_smtp_ssl,
                                     use_starttls=bg_notify_smtp_starttls,
                                     timeout_seconds=bg_notify_smtp_timeout,
+                                ),
+                                sent_copy_config=ImapAppendConfig(
+                                    host=bg_notify_imap_host,
+                                    port=bg_notify_imap_port,
+                                    username=bg_notify_sender,
+                                    password=bg_notify_pass,
+                                    mailbox=bg_notify_imap_sent_folder or "INBOX.Sent",
+                                    use_ssl=bg_notify_imap_ssl,
                                 ),
                             )
                         else:
@@ -530,21 +542,37 @@ else:
             if bg_notify_mode == "Senden"
             else "Benachrichtigungs-Entwurf/Entwuerfe gespeichert"
         )
+        bg_notify_show_hint = any(
+            (result.details or "").strip()
+            for result in bg_notify_results
+            if result.status == bg_notify_success_status
+        )
 
         ok = sum(1 for result in bg_notify_results if result.status == bg_notify_success_status)
         err = len(bg_notify_results) - ok
+        warn = sum(
+            1
+            for result in bg_notify_results
+            if result.status == bg_notify_success_status and (result.details or "").strip()
+        )
 
         if bg_notify_results:
-            st.success(f"{ok} {bg_notify_summary_label}." + (f"  {err} Fehler." if err else ""))
-            notify_rows = [
-                {
+            st.success(
+                f"{ok} {bg_notify_summary_label}."
+                + (f"  {warn} Hinweis(e)." if warn else "")
+                + (f"  {err} Fehler." if err else "")
+            )
+            notify_rows = []
+            for result in bg_notify_results:
+                row = {
                     "Teilnehmer": result.vorname,
                     "Firma": result.firma,
                     "Empfaenger": result.to_email,
                     "Status": result.details if result.status == "error" and result.details else bg_notify_success_label,
                 }
-                for result in bg_notify_results
-            ]
+                if bg_notify_show_hint:
+                    row["Hinweis"] = (result.details or "").strip() or "-"
+                notify_rows.append(row)
             st.dataframe(pd.DataFrame(notify_rows), use_container_width=True, hide_index=True)
 
         if bg_notify_skipped:
@@ -566,7 +594,7 @@ with st.expander("Badge-Mails speichern oder senden", expanded=False):
     if n_with_email == 0:
         st.warning("Keine Person hat eine E-Mail-Adresse hinterlegt. Mail-Erstellung nicht moeglich.")
     else:
-        bg_imap_host, bg_imap_port, bg_imap_folder, bg_imap_ssl = _bg_load_imap_defaults()
+        bg_imap_host, bg_imap_port, bg_imap_folder, bg_imap_sent_folder, bg_imap_ssl = _bg_load_imap_defaults()
         bg_smtp_host, bg_smtp_port, bg_smtp_ssl, bg_smtp_starttls, bg_smtp_timeout = _bg_load_smtp_defaults()
 
         bg_mail_mode = st.radio(
@@ -646,6 +674,8 @@ with st.expander("Badge-Mails speichern oder senden", expanded=False):
 
         if bg_is_send_mode and not bg_smtp_host:
             st.warning("SMTP-Konfiguration fehlt. Bitte `mse_smtp_mail_send` in den Secrets pruefen.")
+        elif bg_is_send_mode and not bg_imap_host:
+            st.warning("IMAP-Konfiguration fuer die Sent-Kopie fehlt. Bitte `mse_imap_mail_drafts` in den Secrets pruefen.")
         elif (not bg_is_send_mode) and not bg_imap_host:
             st.warning("IMAP-Draft-Konfiguration fehlt. Bitte `mse_imap_mail_drafts` in den Secrets pruefen.")
 
@@ -655,6 +685,7 @@ with st.expander("Badge-Mails speichern oder senden", expanded=False):
             and bool(bg_pass)
             and bool(bg_subject.strip())
             and bool(bg_smtp_host if bg_is_send_mode else bg_imap_host)
+            and bool(bg_imap_host if bg_is_send_mode else True)
         )
 
         bg_button_label = "E-Mails senden" if bg_is_send_mode else "Entwuerfe erstellen"
@@ -690,6 +721,14 @@ with st.expander("Badge-Mails speichern oder senden", expanded=False):
                                     use_starttls=bg_smtp_starttls,
                                     timeout_seconds=bg_smtp_timeout,
                                 ),
+                                sent_copy_config=ImapAppendConfig(
+                                    host=bg_imap_host,
+                                    port=bg_imap_port,
+                                    username=bg_sender.strip(),
+                                    password=bg_pass,
+                                    mailbox=bg_imap_sent_folder or "INBOX.Sent",
+                                    use_ssl=bg_imap_ssl,
+                                ),
                             )
                         else:
                             results = create_serienmailing_drafts(
@@ -721,21 +760,37 @@ with st.expander("Badge-Mails speichern oder senden", expanded=False):
             bg_success_status = "sent" if bg_mode == "Senden" else "draft_created"
             bg_success_label = "Gesendet" if bg_mode == "Senden" else "Entwurf gespeichert"
             bg_summary_label = "E-Mail(s) gesendet" if bg_mode == "Senden" else "Entwurf/Entwuerfe gespeichert"
+            bg_show_hint = any(
+                (result.details or "").strip()
+                for result in bg_results
+                if result.status == bg_success_status
+            )
 
             ok = sum(1 for result in bg_results if result.status == bg_success_status)
             err = len(bg_results) - ok
+            warn = sum(
+                1
+                for result in bg_results
+                if result.status == bg_success_status and (result.details or "").strip()
+            )
 
             if bg_results:
-                st.success(f"{ok} {bg_summary_label}." + (f"  {err} Fehler." if err else ""))
-                result_rows = [
-                    {
+                st.success(
+                    f"{ok} {bg_summary_label}."
+                    + (f"  {warn} Hinweis(e)." if warn else "")
+                    + (f"  {err} Fehler." if err else "")
+                )
+                result_rows = []
+                for result in bg_results:
+                    row = {
                         "Vorname": result.vorname,
                         "Firma": result.firma,
                         "E-Mail": result.to_email,
                         "Status": result.details if result.status == "error" and result.details else bg_success_label,
                     }
-                    for result in bg_results
-                ]
+                    if bg_show_hint:
+                        row["Hinweis"] = (result.details or "").strip() or "-"
+                    result_rows.append(row)
                 st.dataframe(pd.DataFrame(result_rows), use_container_width=True, hide_index=True)
 
             if bg_skipped:

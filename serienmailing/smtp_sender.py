@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from serienmailing.imap_sender import SerienMail, SerienMailResult
+from shared.imap_append import ImapAppendConfig
 from shared.mail_message import build_email_message
 from shared.smtp_sender import (
     PreparedEmailMessage,
@@ -12,6 +13,8 @@ from shared.smtp_sender import (
 def send_serienmailing_messages(
     mails: list[SerienMail],
     config: SmtpSendConfig,
+    *,
+    sent_copy_config: ImapAppendConfig | None = None,
 ) -> list[SerienMailResult]:
     prepared_messages = [
         PreparedEmailMessage(
@@ -29,7 +32,11 @@ def send_serienmailing_messages(
         for mail in mails
     ]
 
-    smtp_results = send_email_messages(prepared_messages, config)
+    smtp_results = send_email_messages(
+        prepared_messages,
+        config,
+        sent_copy_config=sent_copy_config,
+    )
     return [
         SerienMailResult(
             to_email=mail.to_email,

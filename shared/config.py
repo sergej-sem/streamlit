@@ -22,6 +22,7 @@ class ImapDraftSettings:
     host: str
     port: int
     drafts_folder: str = "Drafts"
+    sent_folder: str = "INBOX.Sent"
     use_ssl: bool = True
 
 
@@ -159,12 +160,14 @@ def load_imap_draft_settings(secrets: Any = None) -> ImapDraftSettings:
         raise ConfigError(f"Invalid config value: {section_name}.port") from exc
 
     drafts_folder = _clean_str(_mapping_get(section, "drafts_folder")) or "Drafts"
+    sent_folder = _clean_str(_mapping_get(section, "sent_folder")) or "INBOX.Sent"
     use_ssl = parse_bool(_mapping_get(section, "use_ssl"), default=True)
 
     return ImapDraftSettings(
         host=host,
         port=port,
         drafts_folder=drafts_folder,
+        sent_folder=sent_folder,
         use_ssl=use_ssl,
     )
 

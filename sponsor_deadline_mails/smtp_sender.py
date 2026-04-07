@@ -5,6 +5,7 @@ from dataclasses import dataclass
 import pandas as pd
 
 from .core import GeneratedMail
+from shared.imap_append import ImapAppendConfig
 from shared.mail_message import build_email_message
 from shared.smtp_sender import (
     PreparedEmailMessage,
@@ -27,6 +28,8 @@ class SmtpSendRecord:
 def create_smtp_sends(
     mails: list[GeneratedMail],
     config: SmtpSendConfig,
+    *,
+    sent_copy_config: ImapAppendConfig | None = None,
 ) -> list[SmtpSendRecord]:
     prepared_messages = [
         PreparedEmailMessage(
@@ -43,7 +46,11 @@ def create_smtp_sends(
         for mail in mails
     ]
 
-    smtp_results = send_email_messages(prepared_messages, config)
+    smtp_results = send_email_messages(
+        prepared_messages,
+        config,
+        sent_copy_config=sent_copy_config,
+    )
     return [
         SmtpSendRecord(
             sponsor_name=mail.sponsor_name,

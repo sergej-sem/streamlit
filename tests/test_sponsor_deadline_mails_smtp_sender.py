@@ -7,6 +7,7 @@ from sponsor_deadline_mails.smtp_sender import (
     build_smtp_send_log_dataframe,
     create_smtp_sends,
 )
+from shared.imap_append import ImapAppendConfig
 from shared.smtp_sender import SmtpSendConfig, SmtpSendResult
 
 
@@ -77,6 +78,26 @@ class CreateSmtpSendsTests(unittest.TestCase):
         create_smtp_sends([_make_mail(cc_email="cc@example.com")], _make_config())
         prepared_messages = mock_send.call_args[0][0]
         self.assertIn("Cc: cc@example.com", prepared_messages[0].message.as_string())
+
+    @patch("sponsor_deadline_mails.smtp_sender.send_email_messages")
+    def test_passes_sent_copy_config_through(self, mock_send):
+        mock_send.return_value = []
+
+        sent_copy_config = ImapAppendConfig(
+            host="imap.example.com",
+            port=993,
+            username="sender@example.com",
+            password="secret",
+            mailbox="INBOX.Sent",
+            use_ssl=True,
+        )
+        create_smtp_sends(
+            [_make_mail()],
+            _make_config(),
+            sent_copy_config=sent_copy_config,
+        )
+
+        self.assertEqual(sent_copy_config, mock_send.call_args.kwargs["sent_copy_config"])
 
 
 class BuildSmtpSendLogDataframeTests(unittest.TestCase):

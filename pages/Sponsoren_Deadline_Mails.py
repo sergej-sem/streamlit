@@ -13,6 +13,7 @@ from shared.config import (
     load_imap_draft_settings,
     load_smtp_send_settings,
 )
+from shared.imap_append import ImapAppendConfig
 from shared.smtp_sender import SmtpSendConfig
 from sponsor_deadline_mails import (
     DEFAULT_EVENT_CITY,
@@ -122,6 +123,14 @@ def _load_base_imap_config() -> ImapDraftConfig | None:
     )
 
 
+def _load_base_sent_folder() -> str | None:
+    try:
+        settings = load_imap_draft_settings(st.secrets)
+    except ConfigError:
+        return None
+    return settings.sent_folder
+
+
 def _load_base_smtp_config() -> SmtpSendConfig | None:
     try:
         settings = load_smtp_send_settings(st.secrets)
@@ -178,6 +187,7 @@ def _frag_summary() -> None:
 _init_state()
 
 base_imap_config = _load_base_imap_config()
+base_sent_folder = _load_base_sent_folder()
 base_smtp_config = _load_base_smtp_config()
 
 render_page_title("Deadline-E-Mails fuer Sponsoren")
@@ -344,6 +354,8 @@ elif not sender_password:
     st.warning("Bitte gib Dein E-Mail-Passwort ein.")
 elif is_send_mode and base_smtp_config is None:
     st.error("SMTP-Senden ist aktuell nicht eingerichtet. Bitte `mse_smtp_mail_send` pruefen.")
+elif is_send_mode and base_imap_config is None:
+    st.error("IMAP-Konfiguration fuer die Sent-Kopie fehlt. Bitte `mse_imap_mail_drafts` pruefen.")
 elif (not is_send_mode) and base_imap_config is None:
     st.error("IMAP-Drafts sind aktuell nicht eingerichtet. Bitte `mse_imap_mail_drafts` pruefen.")
 elif (not is_send_mode) and not base_imap_config.drafts_folder.strip():
@@ -398,6 +410,14 @@ else:
                         use_starttls=base_smtp_config.use_starttls,
                         timeout_seconds=base_smtp_config.timeout_seconds,
                     ),
+                    sent_copy_config=ImapAppendConfig(
+                        host=base_imap_config.host,
+                        port=base_imap_config.port,
+                        username=sender_email,
+                        password=sender_password,
+                        mailbox=base_sent_folder or "INBOX.Sent",
+                        use_ssl=base_imap_config.use_ssl,
+                    ),
                 )
             else:
                 records = create_imap_drafts(
@@ -421,12 +441,16 @@ else:
             success_status = "sent" if is_send_mode else "draft_created"
             success_count = sum(record.result == success_status for record in records)
             error_count = sum(record.result == "error" for record in records)
+            warning_count = sum(record.result == success_status and (record.details or "").strip() for record in records)
             if error_count:
                 st.warning(
-                    f"{'Gesendet' if is_send_mode else 'Entwuerfe gespeichert'}: {success_count}, Fehler: {error_count}"
+                    f"{'Gesendet' if is_send_mode else 'Entwuerfe gespeichert'}: {success_count}, Hinweise: {warning_count}, Fehler: {error_count}"
                 )
             else:
-                st.success(f"{'Gesendet' if is_send_mode else 'Entwuerfe gespeichert'}: {success_count}")
+                st.success(
+                    f"{'Gesendet' if is_send_mode else 'Entwuerfe gespeichert'}: {success_count}"
+                    + (f", Hinweise: {warning_count}" if warning_count else "")
+                )
 
 mail_log_records = st.session_state.get("sdm_mail_log_records")
 mail_run_context = st.session_state.get("sdm_mail_run_context")

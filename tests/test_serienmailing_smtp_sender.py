@@ -3,6 +3,7 @@ from unittest.mock import patch
 
 from serienmailing.imap_sender import SerienMail
 from serienmailing.smtp_sender import send_serienmailing_messages
+from shared.imap_append import ImapAppendConfig
 from shared.smtp_sender import SmtpSendConfig, SmtpSendResult
 
 
@@ -91,3 +92,23 @@ class SendSerienmailingMessagesTests(unittest.TestCase):
         self.assertEqual(1, len(prepared_messages))
         payload = prepared_messages[0].message.as_string()
         self.assertIn("badge.pdf", payload)
+
+    @patch("serienmailing.smtp_sender.send_email_messages")
+    def test_passes_sent_copy_config_through(self, mock_send):
+        mock_send.return_value = []
+
+        sent_copy_config = ImapAppendConfig(
+            host="imap.example.com",
+            port=993,
+            username="sender@example.com",
+            password="secret",
+            mailbox="INBOX.Sent",
+            use_ssl=True,
+        )
+        send_serienmailing_messages(
+            [_make_mail()],
+            _make_config(),
+            sent_copy_config=sent_copy_config,
+        )
+
+        self.assertEqual(sent_copy_config, mock_send.call_args.kwargs["sent_copy_config"])

@@ -4,6 +4,8 @@ import smtplib
 from dataclasses import dataclass
 from email.message import EmailMessage
 
+from shared.imap_append import ImapAppendConfig, append_message_to_mailbox
+
 
 @dataclass(frozen=True)
 class SmtpSendConfig:
@@ -65,6 +67,8 @@ def _connect(config: SmtpSendConfig):
 def send_email_messages(
     messages: list[PreparedEmailMessage],
     config: SmtpSendConfig,
+    *,
+    sent_copy_config: ImapAppendConfig | None = None,
 ) -> list[SmtpSendResult]:
     if not config.host.strip():
         raise ValueError("Der SMTP-Server darf nicht leer sein.")
@@ -89,12 +93,18 @@ def send_email_messages(
                 refused = connection.send_message(item.message)
                 if refused:
                     raise RuntimeError("Mindestens ein Empfaenger wurde vom Mailserver abgelehnt.")
+                details = ""
+                if sent_copy_config is not None:
+                    try:
+                        append_message_to_mailbox(item.message, sent_copy_config)
+                    except Exception as exc:
+                        details = str(exc)
                 results.append(
                     SmtpSendResult(
                         to_email=item.to_email,
                         subject=item.subject,
                         status="sent",
-                        details="",
+                        details=details,
                     )
                 )
             except Exception as exc:

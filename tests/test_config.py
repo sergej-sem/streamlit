@@ -138,6 +138,7 @@ class ImapDraftConfigTests(unittest.TestCase):
                 "host": "imap.example.org",
                 "port": "993",
                 "drafts_folder": "Entwuerfe",
+                "sent_folder": "Gesendet",
                 "use_ssl": "false",
             }
         }
@@ -145,6 +146,7 @@ class ImapDraftConfigTests(unittest.TestCase):
         self.assertEqual(settings.host, "imap.example.org")
         self.assertEqual(settings.port, 993)
         self.assertEqual(settings.drafts_folder, "Entwuerfe")
+        self.assertEqual(settings.sent_folder, "Gesendet")
         self.assertFalse(settings.use_ssl)
 
     def test_applies_defaults(self):
@@ -152,6 +154,7 @@ class ImapDraftConfigTests(unittest.TestCase):
             {"mse_imap_mail_drafts": {"host": "imap.example.org", "port": 993}}
         )
         self.assertEqual(settings.drafts_folder, "Drafts")
+        self.assertEqual(settings.sent_folder, "INBOX.Sent")
         self.assertTrue(settings.use_ssl)
 
     def test_missing_section_raises(self):

@@ -23,6 +23,7 @@ from shared.config import (
     load_imap_draft_settings,
     load_smtp_send_settings,
 )
+from shared.imap_append import ImapAppendConfig
 from shared.smtp_sender import SmtpSendConfig
 from streamlit_ui import render_email_selectbox
 
@@ -39,12 +40,12 @@ def _init_state() -> None:
     st.session_state.setdefault("sm_mail_result", None)
 
 
-def _load_imap_defaults() -> tuple[str, int, str, bool]:
+def _load_imap_defaults() -> tuple[str, int, str, str, bool]:
     try:
         settings = load_imap_draft_settings(st.secrets)
-        return settings.host, settings.port, settings.drafts_folder, settings.use_ssl
+        return settings.host, settings.port, settings.drafts_folder, settings.sent_folder, settings.use_ssl
     except ConfigError:
-        return "", 993, "Drafts", True
+        return "", 993, "Drafts", "INBOX.Sent", True
 
 
 def _load_smtp_defaults() -> tuple[str, int, bool, bool, int]:
@@ -82,7 +83,7 @@ _init_state()
 
 st.title("Serienmailing")
 
-imap_host, imap_port, imap_folder, imap_ssl = _load_imap_defaults()
+imap_host, imap_port, imap_folder, imap_sent_folder, imap_ssl = _load_imap_defaults()
 smtp_host, smtp_port, smtp_use_ssl, smtp_use_starttls, smtp_timeout = _load_smtp_defaults()
 
 col_cred_a, col_cred_b = st.columns(2)
@@ -242,6 +243,8 @@ confirmed = confirm_input.strip() == expected_confirm and n_contacts > 0
 
 if is_send_mode and not smtp_host:
     st.warning("SMTP-Konfiguration fehlt. Bitte `mse_smtp_mail_send` in den Secrets pruefen.")
+elif is_send_mode and not imap_host:
+    st.warning("IMAP-Konfiguration fuer die Sent-Kopie fehlt. Bitte `mse_imap_mail_drafts` in den Secrets pruefen.")
 elif (not is_send_mode) and not imap_host:
     st.warning("IMAP-Draft-Konfiguration fehlt. Bitte `mse_imap_mail_drafts` in den Secrets pruefen.")
 
@@ -252,6 +255,7 @@ ready = (
     and bool(subject_tpl.strip())
     and bool(mail_text.strip())
     and bool(smtp_host if is_send_mode else imap_host)
+    and bool(imap_host if is_send_mode else True)
 )
 
 button_label = "E-Mails senden" if is_send_mode else "Entwuerfe erstellen"
@@ -287,6 +291,14 @@ if st.button(button_label, disabled=not ready, type="primary"):
                         use_starttls=smtp_use_starttls,
                         timeout_seconds=smtp_timeout,
                     ),
+                    sent_copy_config=ImapAppendConfig(
+                        host=imap_host,
+                        port=imap_port,
+                        username=sender_email.strip(),
+                        password=sender_password,
+                        mailbox=imap_sent_folder or "INBOX.Sent",
+                        use_ssl=imap_ssl,
+                    ),
                 )
             else:
                 results = create_serienmailing_drafts(
@@ -311,18 +323,26 @@ if mail_result:
     success_status = "sent" if result_mode == "Senden" else "draft_created"
     success_label = "Gesendet" if result_mode == "Senden" else "Entwurf gespeichert"
     summary_label = "E-Mail(s) gesendet" if result_mode == "Senden" else "Entwurf/Entwuerfe gespeichert"
+    show_hint = any((result.details or "").strip() for result in results if result.status == success_status)
 
-    result_rows = [
-        {
+    result_rows = []
+    for result in results:
+        row = {
             "Vorname": result.vorname,
             "Firma": result.firma,
             "E-Mail": result.to_email,
             "Status": result.details if result.status == "error" and result.details else success_label,
         }
-        for result in results
-    ]
+        if show_hint:
+            row["Hinweis"] = (result.details or "").strip() or "-"
+        result_rows.append(row)
     result_df = pd.DataFrame(result_rows)
     ok = sum(1 for result in results if result.status == success_status)
     err = len(results) - ok
-    st.success(f"{ok} {summary_label}." + (f"  {err} Fehler." if err else ""))
+    warn = sum(1 for result in results if result.status == success_status and (result.details or "").strip())
+    st.success(
+        f"{ok} {summary_label}."
+        + (f"  {warn} Hinweis(e)." if warn else "")
+        + (f"  {err} Fehler." if err else "")
+    )
     st.dataframe(result_df, use_container_width=True, hide_index=True)
