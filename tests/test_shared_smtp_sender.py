@@ -10,6 +10,7 @@ from shared.smtp_sender import (
     PreparedEmailMessage,
     SmtpSendConfig,
     _friendly_smtp_error,
+    _smtp_local_hostname,
     send_email_messages,
 )
 
@@ -65,6 +66,20 @@ class FriendlySmtpErrorTests(unittest.TestCase):
 
     def test_refused_error(self):
         self.assertIn("Empfaenger", _friendly_smtp_error("Recipient refused"))
+
+
+class SmtpLocalHostnameTests(unittest.TestCase):
+    @patch("shared.smtp_sender.socket.gethostname", return_value="Admin-PC")
+    def test_keeps_short_valid_hostname(self, mock_hostname):
+        self.assertEqual("Admin-PC", _smtp_local_hostname())
+
+    @patch("shared.smtp_sender.socket.gethostname", return_value="Admin-PC.fritz.box")
+    def test_shortens_fqdn_hostname(self, mock_hostname):
+        self.assertEqual("Admin-PC", _smtp_local_hostname())
+
+    @patch("shared.smtp_sender.socket.gethostname", return_value="@@@")
+    def test_returns_none_for_invalid_hostname(self, mock_hostname):
+        self.assertIsNone(_smtp_local_hostname())
 
 
 class BuildEmailMessageTests(unittest.TestCase):
@@ -153,9 +168,10 @@ class BuildEmailMessageTests(unittest.TestCase):
 
 
 class SendEmailMessagesTests(unittest.TestCase):
+    @patch("shared.smtp_sender.socket.gethostname", return_value="Admin-PC.fritz.box")
     @patch("shared.smtp_sender.append_message_to_mailbox")
     @patch("shared.smtp_sender.smtplib.SMTP_SSL")
-    def test_successful_ssl_send(self, mock_smtp_ssl, mock_append):
+    def test_successful_ssl_send(self, mock_smtp_ssl, mock_append, mock_hostname):
         connection = MagicMock()
         connection.send_message.return_value = {}
         mock_smtp_ssl.return_value = connection
@@ -168,8 +184,9 @@ class SendEmailMessagesTests(unittest.TestCase):
             "smtp.example.com",
             465,
             timeout=30,
+            local_hostname="Admin-PC",
         )
-        connection.ehlo.assert_called_once_with()
+        connection.ehlo.assert_called_once_with("Admin-PC")
         connection.login.assert_called_once_with("sender@example.com", "secret")
         connection.send_message.assert_called_once()
         self.assertEqual("sender@example.com", connection.send_message.call_args.kwargs["from_addr"])
@@ -210,8 +227,9 @@ class SendEmailMessagesTests(unittest.TestCase):
         self.assertEqual("sent", results[0].status)
         self.assertIn("Sent-Kopie", results[0].details)
 
+    @patch("shared.smtp_sender.socket.gethostname", return_value="Admin-PC.fritz.box")
     @patch("shared.smtp_sender.smtplib.SMTP")
-    def test_starttls_path(self, mock_smtp):
+    def test_starttls_path(self, mock_smtp, mock_hostname):
         connection = MagicMock()
         connection.send_message.return_value = {}
         mock_smtp.return_value = connection
@@ -226,10 +244,11 @@ class SendEmailMessagesTests(unittest.TestCase):
             "smtp.example.com",
             587,
             timeout=30,
+            local_hostname="Admin-PC",
         )
         connection.starttls.assert_called_once()
         self.assertGreaterEqual(connection.ehlo.call_count, 2)
-        connection.ehlo.assert_any_call()
+        connection.ehlo.assert_any_call("Admin-PC")
 
     @patch("shared.smtp_sender.smtplib.SMTP_SSL")
     def test_login_failure_raises_runtime_error(self, mock_smtp_ssl):

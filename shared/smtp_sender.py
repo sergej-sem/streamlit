@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import copy
+import re
+import socket
 import smtplib
 from dataclasses import dataclass
 from email import utils as email_utils
@@ -59,6 +61,17 @@ def _normalized_mailbox(value: str) -> str:
     return (addr or "").strip().lower()
 
 
+def _smtp_local_hostname() -> str | None:
+    raw = (socket.gethostname() or "").strip()
+    if not raw:
+        return None
+    short = raw.split(".", 1)[0].strip()
+    if not short:
+        return None
+    sanitized = re.sub(r"[^A-Za-z0-9-]", "", short)
+    return sanitized or None
+
+
 def _envelope_recipients(message: EmailMessage) -> list[str]:
     header_values = [
         value
@@ -94,14 +107,23 @@ def _message_for_transport(message: EmailMessage) -> EmailMessage:
 
 def _connect(config: SmtpSendConfig):
     connect_kwargs = {"timeout": config.timeout_seconds}
+    local_hostname = _smtp_local_hostname()
+    if local_hostname:
+        connect_kwargs["local_hostname"] = local_hostname
     if config.use_ssl:
         client = smtplib.SMTP_SSL(config.host, config.port, **connect_kwargs)
     else:
         client = smtplib.SMTP(config.host, config.port, **connect_kwargs)
-    client.ehlo()
+    if local_hostname:
+        client.ehlo(local_hostname)
+    else:
+        client.ehlo()
     if config.use_starttls:
         client.starttls()
-        client.ehlo()
+        if local_hostname:
+            client.ehlo(local_hostname)
+        else:
+            client.ehlo()
     return client
 
 
