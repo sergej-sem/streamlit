@@ -64,6 +64,18 @@ class BuildHtmlBodyTests(unittest.TestCase):
     def test_returns_string(self):
         self.assertIsInstance(self._body(), str)
 
+    def test_default_closing_is_present(self):
+        body = self._body(text="Mailtext")
+        self.assertIn("Beste Gr", body)
+
+    def test_closing_text_can_be_disabled_with_empty_string(self):
+        body = build_html_body("Anna", "Text", "", closing_text="")
+        self.assertNotIn("Beste Gr", body)
+
+    def test_closing_text_can_be_disabled_with_none(self):
+        body = build_html_body("Anna", "Text", "", closing_text=None)
+        self.assertNotIn("Beste Gr", body)
+
     def test_signature_after_text(self):
         body = self._body(text="Mailtext")
         text_pos = body.find("Mailtext")

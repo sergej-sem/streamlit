@@ -1,6 +1,8 @@
 import email as _email_mod
 import imaplib
 import unittest
+from email.parser import BytesParser
+from email.policy import SMTP
 from unittest.mock import MagicMock, patch
 
 from sponsor_deadline_mails.core import GeneratedMail
@@ -151,6 +153,11 @@ class BuildMessageTests(unittest.TestCase):
         msg = _parse_message(_make_mail())
         self.assertIsNotNone(msg["Message-ID"])
 
+    def test_message_id_uses_sender_domain(self):
+        config = _make_config(username="absender@example.com")
+        msg = _parse_message(_make_mail(), config)
+        self.assertTrue(msg["Message-ID"].lower().endswith("@example.com>"))
+
     def test_multipart_contains_html_and_plain(self):
         msg = _parse_message(_make_mail(html_body="<p>Text</p>"))
         content_types = [part.get_content_type() for part in msg.walk()]
@@ -162,6 +169,24 @@ class BuildMessageTests(unittest.TestCase):
         msg = _parse_message(_make_mail())
         content_types = [part.get_content_type() for part in msg.walk()]
         self.assertNotIn("application/pdf", content_types)
+
+    def test_non_ascii_text_parts_use_quoted_printable(self):
+        raw = _build_message(
+            _make_mail(
+                subject="Wichtige Informationen – Frist für Müller",
+                html_body="<p>Hallo Jörg Müller, beste Grüße!</p>",
+            ),
+            _make_config(username="absender@example.com"),
+        )
+        self.assertNotIn(b"Content-Transfer-Encoding: 8bit", raw)
+
+        parsed = BytesParser(policy=SMTP).parsebytes(raw)
+        text_parts = [
+            part for part in parsed.walk()
+            if part.get_content_type() in {"text/plain", "text/html"}
+        ]
+        for part in text_parts:
+            self.assertEqual("quoted-printable", part["Content-Transfer-Encoding"])
 
 
 # ── create_imap_drafts — validation ──────────────────────────────────────────

@@ -18,6 +18,12 @@ from serienmailing.mail_builder import (
     build_subject,
 )
 from serienmailing.smtp_sender import send_serienmailing_messages
+from serienmailing.ui_helpers import (
+    MAIL_MODE_SEND,
+    build_confirmation_phrase,
+    default_mail_text,
+    summarize_mail_results,
+)
 from shared.config import (
     ConfigError,
     load_imap_draft_settings,
@@ -29,8 +35,6 @@ from streamlit_ui import render_email_selectbox
 
 st.set_page_config(page_title="Serienmailing", layout="wide")
 
-_CONFIRM_WORD_DRAFT = "ENTW\u00dcRFE"
-_CONFIRM_WORD_SEND = "SENDEN"
 _SEVERIN_ADDR = "severin.wagner@mysecurityevent.de"
 _MAIL_MODE_OPTIONS = ("Entw\u00fcrfe", "Senden")
 
@@ -38,6 +42,13 @@ _MAIL_MODE_OPTIONS = ("Entw\u00fcrfe", "Senden")
 def _init_state() -> None:
     st.session_state.setdefault("sm_contacts", None)
     st.session_state.setdefault("sm_mail_result", None)
+    st.session_state.setdefault("sm_mail_text", default_mail_text())
+    st.session_state.setdefault("sm_confirm_input", "")
+    st.session_state.setdefault("sm_confirm_expected", "")
+
+
+def _reset_confirmation_input() -> None:
+    st.session_state["sm_confirm_input"] = ""
 
 
 def _load_imap_defaults() -> tuple[str, int, str, str, bool]:
@@ -188,6 +199,7 @@ mail_text = st.text_area(
     height=200,
     placeholder="Ihr Text hier ...\n\nZeilenumbrueche werden korrekt uebernommen.",
     help="Platzhalter: {vorname}, {firma}, {email}",
+    key="sm_mail_text",
 )
 
 attachment_file = st.file_uploader("Anhang (optional)", key="sm_attachment")
@@ -214,6 +226,7 @@ if contacts_df is not None and not contacts_df.empty and subject_tpl and mail_te
         signature_html,
         preview_row["firma"],
         preview_row["email"],
+        closing_text="",
     )
     st.caption(f"Betreff: {preview_subject}")
     st.html(preview_body)
@@ -228,16 +241,20 @@ mail_mode = st.radio(
     index=0,
     horizontal=True,
     key="sm_mail_mode",
+    on_change=_reset_confirmation_input,
 )
-is_send_mode = mail_mode == "Senden"
+is_send_mode = mail_mode == MAIL_MODE_SEND
 
 n_contacts = len(contacts_df) if contacts_df is not None and not contacts_df.empty else 0
-confirm_word = _CONFIRM_WORD_SEND if is_send_mode else _CONFIRM_WORD_DRAFT
-expected_confirm = f"{confirm_word} {n_contacts}"
+expected_confirm = build_confirmation_phrase(mail_mode, n_contacts)
+if st.session_state.get("sm_confirm_expected") != expected_confirm:
+    st.session_state["sm_confirm_input"] = ""
+    st.session_state["sm_confirm_expected"] = expected_confirm
 
 confirm_input = st.text_input(
     f"Zur Bestaetigung eingeben: **{expected_confirm}**",
     placeholder=expected_confirm,
+    key="sm_confirm_input",
 )
 confirmed = confirm_input.strip() == expected_confirm and n_contacts > 0
 
@@ -270,7 +287,14 @@ if st.button(button_label, disabled=not ready, type="primary"):
             vorname=row["vorname"],
             firma=row["firma"],
             subject=build_subject(subject_tpl, row["vorname"], row["firma"], row["email"]),
-            html_body=build_html_body(row["vorname"], mail_text, signature_html, row["firma"], row["email"]),
+            html_body=build_html_body(
+                row["vorname"],
+                mail_text,
+                signature_html,
+                row["firma"],
+                row["email"],
+                closing_text="",
+            ),
             attachment_bytes=attachment_bytes,
             attachment_filename=attachment_name,
         )
@@ -320,10 +344,7 @@ mail_result = st.session_state.get("sm_mail_result")
 if mail_result:
     result_mode = mail_result.get("mode", "Entwuerfe")
     results = mail_result.get("results", [])
-    success_status = "sent" if result_mode == "Senden" else "draft_created"
-    success_label = "Gesendet" if result_mode == "Senden" else "Entwurf gespeichert"
-    summary_label = "E-Mail(s) gesendet" if result_mode == "Senden" else "Entwurf/Entwuerfe gespeichert"
-    show_hint = any((result.details or "").strip() for result in results if result.status == success_status)
+    summary_level, summary_text, success_label, show_hint = summarize_mail_results(results, result_mode)
 
     result_rows = []
     for result in results:
@@ -331,18 +352,16 @@ if mail_result:
             "Vorname": result.vorname,
             "Firma": result.firma,
             "E-Mail": result.to_email,
-            "Status": result.details if result.status == "error" and result.details else success_label,
+            "Status": "Fehler" if result.status == "error" else success_label,
         }
         if show_hint:
             row["Hinweis"] = (result.details or "").strip() or "-"
         result_rows.append(row)
     result_df = pd.DataFrame(result_rows)
-    ok = sum(1 for result in results if result.status == success_status)
-    err = len(results) - ok
-    warn = sum(1 for result in results if result.status == success_status and (result.details or "").strip())
-    st.success(
-        f"{ok} {summary_label}."
-        + (f"  {warn} Hinweis(e)." if warn else "")
-        + (f"  {err} Fehler." if err else "")
-    )
+    if summary_level == "success":
+        st.success(summary_text)
+    elif summary_level == "warning":
+        st.warning(summary_text)
+    else:
+        st.error(summary_text)
     st.dataframe(result_df, use_container_width=True, hide_index=True)

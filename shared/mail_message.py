@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import re
+import unicodedata
+from email import utils as email_utils
 from email.message import EmailMessage
 from email.policy import SMTP
 from email.utils import formatdate, make_msgid
@@ -21,6 +24,84 @@ def _attachment_mime_type(filename: str) -> tuple[str, str]:
     return _MIME_MAP.get(ext, ("application", "octet-stream"))
 
 
+def _sanitize_attachment_filename(filename: str | None) -> str:
+    raw = (filename or "").strip()
+    if not raw:
+        return "attachment"
+
+    transliteration_map = str.maketrans({
+        "ß": "ss",
+        "ẞ": "SS",
+        "æ": "ae",
+        "Æ": "AE",
+        "ø": "o",
+        "Ø": "O",
+    })
+    raw = raw.translate(transliteration_map)
+
+    if "." in raw:
+        base, ext = raw.rsplit(".", 1)
+        ext = "." + ext
+    else:
+        base, ext = raw, ""
+
+    normalized_base = (
+        unicodedata.normalize("NFKD", base)
+        .encode("ascii", "ignore")
+        .decode("ascii")
+    )
+    normalized_ext = (
+        unicodedata.normalize("NFKD", ext)
+        .encode("ascii", "ignore")
+        .decode("ascii")
+    )
+
+    normalized_base = re.sub(r"\s+", "_", normalized_base)
+    normalized_base = re.sub(r"[^A-Za-z0-9._-]", "_", normalized_base)
+    normalized_base = re.sub(r"_+", "_", normalized_base).strip("._")
+    normalized_ext = re.sub(r"[^A-Za-z0-9.]", "", normalized_ext)
+
+    if not normalized_base:
+        normalized_base = "attachment"
+
+    return f"{normalized_base}{normalized_ext}"
+
+
+def _normalize_address_header(value: str, *, allow_multiple: bool) -> str:
+    raw = (value or "").strip()
+    if not raw:
+        return ""
+
+    addresses = email_utils.getaddresses([raw])
+    formatted: list[str] = []
+    for display_name, addr in addresses:
+        normalized_addr = (addr or "").strip()
+        normalized_name = (display_name or "").strip()
+        if not normalized_addr:
+            continue
+        formatted.append(
+            email_utils.formataddr((normalized_name, normalized_addr))
+            if normalized_name
+            else normalized_addr
+        )
+
+    if not formatted:
+        return raw
+    if allow_multiple:
+        return ", ".join(formatted)
+    return formatted[0]
+
+
+def _message_id_for_sender(from_email: str) -> str:
+    _, addr = email_utils.parseaddr(from_email)
+    if "@" not in addr:
+        return make_msgid()
+    domain = addr.rsplit("@", 1)[-1].strip().lower()
+    if not domain:
+        return make_msgid()
+    return make_msgid(domain=domain)
+
+
 def build_email_message(
     *,
     from_email: str,
@@ -32,25 +113,39 @@ def build_email_message(
     attachment_bytes: bytes | None = None,
     attachment_filename: str | None = None,
 ) -> EmailMessage:
-    message = EmailMessage()
+    normalized_from = _normalize_address_header(from_email, allow_multiple=False)
+    normalized_to = _normalize_address_header(to_email, allow_multiple=True)
+    normalized_cc = _normalize_address_header(cc_email, allow_multiple=True)
+    safe_attachment_filename = _sanitize_attachment_filename(attachment_filename) if attachment_filename else None
+
+    message = EmailMessage(policy=SMTP)
     message["Subject"] = subject
-    message["From"] = from_email
-    message["To"] = to_email
-    if cc_email.strip():
-        message["Cc"] = cc_email.strip()
+    message["From"] = normalized_from or from_email.strip()
+    message["To"] = normalized_to or to_email.strip()
+    if normalized_cc:
+        message["Cc"] = normalized_cc
     message["Date"] = formatdate(localtime=True)
-    message["Message-ID"] = make_msgid()
+    message["Message-ID"] = _message_id_for_sender(message["From"])
 
-    message.set_content(plain_body or html_to_plain_text(html_body))
-    message.add_alternative(html_body, subtype="html")
+    message.set_content(
+        plain_body or html_to_plain_text(html_body),
+        charset="utf-8",
+        cte="quoted-printable",
+    )
+    message.add_alternative(
+        html_body,
+        subtype="html",
+        charset="utf-8",
+        cte="quoted-printable",
+    )
 
-    if attachment_bytes and attachment_filename:
-        maintype, subtype = _attachment_mime_type(attachment_filename)
+    if attachment_bytes and safe_attachment_filename:
+        maintype, subtype = _attachment_mime_type(safe_attachment_filename)
         message.add_attachment(
             attachment_bytes,
             maintype=maintype,
             subtype=subtype,
-            filename=attachment_filename,
+            filename=safe_attachment_filename,
         )
 
     return message

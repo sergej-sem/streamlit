@@ -1,6 +1,8 @@
 import email as _email_mod
 import imaplib
 import unittest
+from email.parser import BytesParser
+from email.policy import SMTP
 from unittest.mock import MagicMock, patch
 
 from serienmailing.imap_sender import (
@@ -116,6 +118,11 @@ class BuildMessageTests(unittest.TestCase):
         msg = self._parse(_make_mail())
         self.assertIsNotNone(msg["Message-ID"])
 
+    def test_message_id_uses_sender_domain(self):
+        config = _make_config(username="sender@example.com")
+        msg = self._parse(_make_mail(), config)
+        self.assertTrue(msg["Message-ID"].lower().endswith("@example.com>"))
+
     def test_multipart_with_html_and_plain(self):
         msg = self._parse(_make_mail(html_body="<p>Hello</p>"))
         content_types = [part.get_content_type() for part in msg.walk()]
@@ -169,6 +176,28 @@ class BuildMessageTests(unittest.TestCase):
     def test_returns_bytes(self):
         raw = _build_message(_make_mail(), _make_config())
         self.assertIsInstance(raw, bytes)
+
+    def test_non_ascii_parts_use_quoted_printable_and_ascii_attachment_name(self):
+        raw = _build_message(
+            _make_mail(
+                subject="Test – Badge für Jörg Müller",
+                html_body="<p>Hallo Jörg Müller, beste Grüße!</p>",
+                attachment_bytes=b"%PDF-1.4 fake content",
+                attachment_filename="badge-Jörg-Müller.pdf",
+            ),
+            _make_config(username="sender@example.com"),
+        )
+        self.assertNotIn(b"Content-Transfer-Encoding: 8bit", raw)
+
+        parsed = BytesParser(policy=SMTP).parsebytes(raw)
+        text_parts = [
+            part for part in parsed.walk()
+            if part.get_content_type() in {"text/plain", "text/html"}
+        ]
+        for part in text_parts:
+            self.assertEqual("quoted-printable", part["Content-Transfer-Encoding"])
+        attachment = next(parsed.iter_attachments())
+        self.assertEqual("badge-Jorg-Muller.pdf", attachment.get_filename())
 
 
 # ── create_serienmailing_drafts — validation ──────────────────────────────────
