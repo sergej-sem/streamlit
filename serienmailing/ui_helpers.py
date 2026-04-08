@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import MutableMapping
+from typing import Any
+
 from serienmailing.imap_sender import SerienMailResult
 
 MAIL_MODE_DRAFT = "Entw\u00fcrfe"
@@ -10,7 +13,22 @@ _CONFIRM_WORD_SEND = "SENDEN"
 
 
 def default_mail_text() -> str:
-    return "Beste Gr\u00fc\u00dfe,"
+    return "\n\nBeste Gr\u00fc\u00dfe,"
+
+
+def reset_confirmation_state(state: MutableMapping[str, Any]) -> None:
+    state["sm_confirm_input"] = ""
+    state["sm_confirm_expected"] = ""
+
+
+def apply_contacts_state(state: MutableMapping[str, Any], contacts: Any) -> None:
+    current_mode = state.get("sm_mail_mode", MAIL_MODE_DRAFT)
+    current_text = state.get("sm_mail_text", default_mail_text())
+    state["sm_contacts"] = contacts
+    state["sm_mail_mode"] = current_mode
+    state["sm_mail_text"] = current_text
+    state["sm_mail_result"] = None
+    reset_confirmation_state(state)
 
 
 def build_confirmation_phrase(mode: str, count: int) -> str:

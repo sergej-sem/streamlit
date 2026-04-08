@@ -168,9 +168,8 @@ class SendEmailMessagesTests(unittest.TestCase):
             "smtp.example.com",
             465,
             timeout=30,
-            local_hostname="example.com",
         )
-        connection.ehlo.assert_called_once_with("example.com")
+        connection.ehlo.assert_called_once_with()
         connection.login.assert_called_once_with("sender@example.com", "secret")
         connection.send_message.assert_called_once()
         self.assertEqual("sender@example.com", connection.send_message.call_args.kwargs["from_addr"])
@@ -227,11 +226,10 @@ class SendEmailMessagesTests(unittest.TestCase):
             "smtp.example.com",
             587,
             timeout=30,
-            local_hostname="example.com",
         )
         connection.starttls.assert_called_once()
         self.assertGreaterEqual(connection.ehlo.call_count, 2)
-        connection.ehlo.assert_any_call("example.com")
+        connection.ehlo.assert_any_call()
 
     @patch("shared.smtp_sender.smtplib.SMTP_SSL")
     def test_login_failure_raises_runtime_error(self, mock_smtp_ssl):

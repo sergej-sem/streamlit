@@ -20,8 +20,10 @@ from serienmailing.mail_builder import (
 from serienmailing.smtp_sender import send_serienmailing_messages
 from serienmailing.ui_helpers import (
     MAIL_MODE_SEND,
+    apply_contacts_state,
     build_confirmation_phrase,
     default_mail_text,
+    reset_confirmation_state,
     summarize_mail_results,
 )
 from shared.config import (
@@ -41,6 +43,7 @@ _MAIL_MODE_OPTIONS = ("Entw\u00fcrfe", "Senden")
 
 def _init_state() -> None:
     st.session_state.setdefault("sm_contacts", None)
+    st.session_state.setdefault("sm_mail_mode", _MAIL_MODE_OPTIONS[0])
     st.session_state.setdefault("sm_mail_result", None)
     st.session_state.setdefault("sm_mail_text", default_mail_text())
     st.session_state.setdefault("sm_confirm_input", "")
@@ -48,7 +51,11 @@ def _init_state() -> None:
 
 
 def _reset_confirmation_input() -> None:
-    st.session_state["sm_confirm_input"] = ""
+    reset_confirmation_state(st.session_state)
+
+
+def _apply_contacts(contacts: pd.DataFrame) -> None:
+    apply_contacts_state(st.session_state, contacts)
 
 
 def _load_imap_defaults() -> tuple[str, int, str, str, bool]:
@@ -126,8 +133,7 @@ with tab_excel:
             for warning in warns:
                 st.warning(warning)
             if st.button("Diese Kontakte \u00fcbernehmen", key="btn_excel"):
-                st.session_state["sm_contacts"] = contacts
-                st.session_state["sm_mail_result"] = None
+                _apply_contacts(contacts)
                 st.rerun()
         except Exception as exc:
             st.error(f"Fehler beim Lesen der Datei: {exc}")
@@ -149,8 +155,7 @@ with tab_hs:
                 with st.spinner("Kontakte werden geladen ..."):
                     try:
                         contacts = _load_hubspot_contacts(list_options[selected_label])
-                        st.session_state["sm_contacts"] = contacts
-                        st.session_state["sm_mail_result"] = None
+                        _apply_contacts(contacts)
                         st.rerun()
                     except Exception as exc:
                         st.error(f"HubSpot-Fehler: {exc}")
@@ -170,8 +175,7 @@ with tab_manual:
         contacts, warns = contacts_from_manual(edited)
         for warning in warns:
             st.warning(warning)
-        st.session_state["sm_contacts"] = contacts
-        st.session_state["sm_mail_result"] = None
+        _apply_contacts(contacts)
         st.rerun()
 
 contacts_df: pd.DataFrame | None = st.session_state["sm_contacts"]

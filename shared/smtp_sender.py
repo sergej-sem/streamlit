@@ -59,13 +59,6 @@ def _normalized_mailbox(value: str) -> str:
     return (addr or "").strip().lower()
 
 
-def _smtp_local_hostname(config: SmtpSendConfig) -> str | None:
-    username_addr = _normalized_mailbox(config.username)
-    if "@" in username_addr:
-        return username_addr.rsplit("@", 1)[-1]
-    return (config.host or "").strip() or None
-
-
 def _envelope_recipients(message: EmailMessage) -> list[str]:
     header_values = [
         value
@@ -100,24 +93,15 @@ def _message_for_transport(message: EmailMessage) -> EmailMessage:
 
 
 def _connect(config: SmtpSendConfig):
-    local_hostname = _smtp_local_hostname(config)
     connect_kwargs = {"timeout": config.timeout_seconds}
-    if local_hostname:
-        connect_kwargs["local_hostname"] = local_hostname
     if config.use_ssl:
         client = smtplib.SMTP_SSL(config.host, config.port, **connect_kwargs)
     else:
         client = smtplib.SMTP(config.host, config.port, **connect_kwargs)
-    if local_hostname:
-        client.ehlo(local_hostname)
-    else:
-        client.ehlo()
+    client.ehlo()
     if config.use_starttls:
         client.starttls()
-        if local_hostname:
-            client.ehlo(local_hostname)
-        else:
-            client.ehlo()
+        client.ehlo()
     return client
 
 
