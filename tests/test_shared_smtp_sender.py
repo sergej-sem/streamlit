@@ -10,6 +10,8 @@ from shared.smtp_sender import (
     PreparedEmailMessage,
     SmtpSendConfig,
     _friendly_smtp_error,
+    _next_send_delay_seconds,
+    _resolve_delay_range,
     _smtp_local_hostname,
     send_email_messages,
 )
@@ -66,7 +68,7 @@ class FriendlySmtpErrorTests(unittest.TestCase):
         self.assertIn("SMTP-Server", _friendly_smtp_error("Connection refused"))
 
     def test_refused_error(self):
-        self.assertIn("Empfaenger", _friendly_smtp_error("Recipient refused"))
+        self.assertIn("Empfänger", _friendly_smtp_error("Recipient refused"))
 
 
 class SmtpLocalHostnameTests(unittest.TestCase):
@@ -81,6 +83,68 @@ class SmtpLocalHostnameTests(unittest.TestCase):
     @patch("shared.smtp_sender.socket.gethostname", return_value="@@@")
     def test_returns_none_for_invalid_hostname(self, mock_hostname):
         self.assertIsNone(_smtp_local_hostname())
+
+
+class DelayResolutionTests(unittest.TestCase):
+    def test_default_delay_uses_randomized_range(self):
+        self.assertEqual((3.0, 6.0), _resolve_delay_range(_make_config()))
+
+    def test_legacy_single_delay_value_remains_supported(self):
+        self.assertEqual(
+            (0.75, 0.75),
+            _resolve_delay_range(
+                _make_config(
+                    delay_between_messages_seconds=0.75,
+                    delay_between_messages_seconds_min=None,
+                    delay_between_messages_seconds_max=None,
+                )
+            ),
+        )
+
+    def test_min_max_delay_range_is_used_when_present(self):
+        self.assertEqual(
+            (3.0, 6.0),
+            _resolve_delay_range(
+                _make_config(
+                    delay_between_messages_seconds_min=3.0,
+                    delay_between_messages_seconds_max=6.0,
+                )
+            ),
+        )
+
+    def test_delay_range_is_sorted_when_values_are_swapped(self):
+        self.assertEqual(
+            (3.0, 6.0),
+            _resolve_delay_range(
+                _make_config(
+                    delay_between_messages_seconds_min=6.0,
+                    delay_between_messages_seconds_max=3.0,
+                )
+            ),
+        )
+
+    def test_non_positive_delay_disables_sleep(self):
+        self.assertIsNone(
+            _resolve_delay_range(
+                _make_config(
+                    delay_between_messages_seconds=0,
+                    delay_between_messages_seconds_min=0,
+                    delay_between_messages_seconds_max=0,
+                )
+            )
+        )
+
+    @patch("shared.smtp_sender.random.uniform", return_value=4.25)
+    def test_next_send_delay_uses_random_uniform_for_ranges(self, mock_uniform):
+        delay_seconds = _next_send_delay_seconds(
+            _make_config(
+                delay_between_messages_seconds_min=3.0,
+                delay_between_messages_seconds_max=6.0,
+            )
+        )
+
+        self.assertEqual(4.25, delay_seconds)
+        mock_uniform.assert_called_once_with(3.0, 6.0)
 
 
 class BuildEmailMessageTests(unittest.TestCase):
@@ -280,7 +344,7 @@ class SendEmailMessagesTests(unittest.TestCase):
         results = send_email_messages([_make_prepared()], _make_config())
 
         self.assertEqual("error", results[0].status)
-        self.assertIn("Empfaenger", results[0].details)
+        self.assertIn("Empfänger", results[0].details)
 
     @patch("shared.smtp_sender.smtplib.SMTP_SSL")
     def test_cc_recipients_are_included_in_envelope(self, mock_smtp_ssl):
@@ -430,9 +494,10 @@ class SendEmailMessagesTests(unittest.TestCase):
         self.assertEqual("First", connection.send_message.call_args_list[0].args[0]["Subject"])
         self.assertEqual("Second", connection.send_message.call_args_list[1].args[0]["Subject"])
 
+    @patch("shared.smtp_sender.random.uniform", return_value=4.25)
     @patch("shared.smtp_sender.time.sleep")
     @patch("shared.smtp_sender.smtplib.SMTP_SSL")
-    def test_multiple_messages_apply_delay_between_sends(self, mock_smtp_ssl, mock_sleep):
+    def test_multiple_messages_apply_delay_between_sends(self, mock_smtp_ssl, mock_sleep, mock_uniform):
         connection = MagicMock()
         connection.send_message.return_value = {}
         mock_smtp_ssl.return_value = connection
@@ -442,10 +507,14 @@ class SendEmailMessagesTests(unittest.TestCase):
                 _make_prepared(to_email="first@example.com", subject="First"),
                 _make_prepared(to_email="second@example.com", subject="Second"),
             ],
-            _make_config(delay_between_messages_seconds=0.5),
+            _make_config(
+                delay_between_messages_seconds_min=3.0,
+                delay_between_messages_seconds_max=6.0,
+            ),
         )
 
-        mock_sleep.assert_called_once_with(0.5)
+        mock_uniform.assert_called_once_with(3.0, 6.0)
+        mock_sleep.assert_called_once_with(4.25)
 
     @patch("shared.smtp_sender.time.sleep")
     @patch("shared.smtp_sender.smtplib.SMTP_SSL")

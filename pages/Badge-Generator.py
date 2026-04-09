@@ -34,12 +34,13 @@ from shared.mail_content_guard import (
     assess_html_mail_content,
     evaluate_send_guard,
 )
+from shared.mail_preview import missing_preview_requirements, preview_ready
 from shared.mail_rich_text import (
     default_mail_body_html,
     editor_html_is_meaningful,
     plain_text_to_editor_html,
+    render_final_mail_html,
     render_mail_rich_text_editor,
-    render_personalized_rich_text_html,
 )
 from shared.smtp_sender import SmtpSendConfig
 from badgegen.notification_settings import (
@@ -109,7 +110,7 @@ def _bg_show_guard_feedback(feedback) -> None:
         return
     text = feedback.message
     if feedback.reasons:
-        text += " Gruende: " + "; ".join(feedback.reasons[:3])
+        text += " Gründe: " + "; ".join(feedback.reasons[:3])
     if feedback.level == "error":
         st.error(text)
     elif feedback.level == "warning":
@@ -420,8 +421,8 @@ n_badge_notifications = len(df_out)
 st.subheader("Badge-Benachrichtigung per E-Mail")
 if not st.session_state.get("badges_pdf_downloaded"):
     st.info(
-        "Nach dem Klick auf `PDF erstellen` stehen hier E-Mail-Aktionen fuer die "
-        "aktuell ausgewaehlten Teilnehmer zur Verfuegung."
+        "Nach dem Klick auf `PDF erstellen` stehen hier E-Mail-Aktionen für die "
+        "aktuell ausgewählten Teilnehmer zur Verfügung."
     )
 else:
     _bg_sync_notification_widget_defaults()
@@ -458,7 +459,7 @@ else:
         )
         bg_notify_pass = st.text_input("Passwort", type="password", key="bg_notify_imap_pass")
         bg_notify_recipient = render_email_selectbox(
-            "E-Mail-Adresse (Empfaenger)",
+            "E-Mail-Adresse (Empfänger)",
             key="bg_notify_recipient_email",
             suggestions=SENDER_EMAIL_SUGGESTIONS,
             placeholder=DEFAULT_BADGE_NOTIFICATION_RECIPIENT,
@@ -466,17 +467,17 @@ else:
         )
 
         if bg_notify_is_send_mode and not bg_notify_smtp_host:
-            st.warning("SMTP-Konfiguration fehlt. Bitte `mse_smtp_mail_send` in den Secrets pruefen.")
+            st.warning("SMTP-Konfiguration fehlt. Bitte `mse_smtp_mail_send` in den Secrets prüfen.")
         elif bg_notify_is_send_mode and not bg_notify_imap_host:
-            st.warning("IMAP-Konfiguration fuer die Sent-Kopie fehlt. Bitte `mse_imap_mail_drafts` in den Secrets pruefen.")
+            st.warning("IMAP-Konfiguration für die Sent-Kopie fehlt. Bitte `mse_imap_mail_drafts` in den Secrets prüfen.")
         elif (not bg_notify_is_send_mode) and not bg_notify_imap_host:
-            st.warning("IMAP-Draft-Konfiguration fehlt. Bitte `mse_imap_mail_drafts` in den Secrets pruefen.")
+            st.warning("IMAP-Draft-Konfiguration fehlt. Bitte `mse_imap_mail_drafts` in den Secrets prüfen.")
 
         bg_notify_expected = f"{_BG_CONFIRM_WORD_SEND} {n_badge_notifications}"
         bg_notify_confirmed = True
         if bg_notify_is_send_mode:
             bg_notify_confirm = st.text_input(
-                f"Zur Bestaetigung eingeben: **{bg_notify_expected}**",
+                f"Zur Bestätigung eingeben: **{bg_notify_expected}**",
                 placeholder=bg_notify_expected,
                 key="bg_notify_send_confirm",
             )
@@ -492,11 +493,11 @@ else:
             and bg_notify_confirmed
         )
 
-        bg_notify_button_label = "E-Mails senden" if bg_notify_is_send_mode else "E-Mail-Entwuerfe erzeugen"
+        bg_notify_button_label = "E-Mails senden" if bg_notify_is_send_mode else "E-Mail-Entwürfe erzeugen"
         bg_notify_spinner_label = (
             f"Sende {n_badge_notifications} Benachrichtigungs-E-Mail(s) ..."
             if bg_notify_is_send_mode
-            else f"Erstelle {n_badge_notifications} Benachrichtigungs-Entwurf/Entwuerfe ..."
+            else f"Erstelle {n_badge_notifications} Benachrichtigungs-Entwurf/Entwürfe ..."
         )
 
         if st.button(bg_notify_button_label, disabled=not bg_notify_ready, type="primary", key="bg_notify_btn"):
@@ -566,7 +567,7 @@ else:
 
     bg_notify_result = st.session_state.get("bg_notify_result")
     if bg_notify_result is not None:
-        bg_notify_mode = bg_notify_result.get("mode", "Entwuerfe")
+        bg_notify_mode = bg_notify_result.get("mode", "Entwürfe")
         bg_notify_results = bg_notify_result.get("results", [])
         bg_notify_skipped = bg_notify_result.get("skipped", [])
         bg_notify_success_status = "sent" if bg_notify_mode == "Senden" else "draft_created"
@@ -574,7 +575,7 @@ else:
         bg_notify_summary_label = (
             "Benachrichtigungs-E-Mail(s) gesendet"
             if bg_notify_mode == "Senden"
-            else "Benachrichtigungs-Entwurf/Entwuerfe gespeichert"
+            else "Benachrichtigungs-Entwurf/Entwürfe gespeichert"
         )
         bg_notify_show_hint = any(
             (result.details or "").strip()
@@ -601,7 +602,7 @@ else:
                 row = {
                     "Teilnehmer": result.vorname,
                     "Firma": result.firma,
-                    "Empfaenger": result.to_email,
+                    "Empfänger": result.to_email,
                     "Status": result.details if result.status == "error" and result.details else bg_notify_success_label,
                 }
                 if bg_notify_show_hint:
@@ -610,9 +611,9 @@ else:
             st.dataframe(pd.DataFrame(notify_rows), use_container_width=True, hide_index=True)
 
         if bg_notify_skipped:
-            st.warning(f"{len(bg_notify_skipped)} Person(en) uebersprungen:")
+            st.warning(f"{len(bg_notify_skipped)} Person(en) übersprungen:")
             skip_rows = [
-                {"Teilnehmer": item["name"], "Empfaenger": item["email"], "Grund": item["reason"]}
+                {"Teilnehmer": item["name"], "Empfänger": item["email"], "Grund": item["reason"]}
                 for item in bg_notify_skipped
             ]
             st.dataframe(pd.DataFrame(skip_rows), use_container_width=True, hide_index=True)
@@ -622,11 +623,11 @@ st.divider()
 with st.expander("Badge-Mails speichern oder senden", expanded=False):
     st.markdown(
         f"**{n_with_email}** Person(en) mit E-Mail-Adresse · "
-        f"**{n_without_email}** ohne (werden uebersprungen)"
+        f"**{n_without_email}** ohne (werden übersprungen)"
     )
 
     if n_with_email == 0:
-        st.warning("Keine Person hat eine E-Mail-Adresse hinterlegt. Mail-Erstellung nicht moeglich.")
+        st.warning("Keine Person hat eine E-Mail-Adresse hinterlegt. Mail-Erstellung nicht möglich.")
     else:
         bg_imap_host, bg_imap_port, bg_imap_folder, bg_imap_sent_folder, bg_imap_ssl = _bg_load_imap_defaults()
         bg_smtp_host, bg_smtp_port, bg_smtp_ssl, bg_smtp_starttls, bg_smtp_timeout = _bg_load_smtp_defaults()
@@ -669,7 +670,22 @@ with st.expander("Badge-Mails speichern oder senden", expanded=False):
         )
 
         df_preview = df_out[df_out["email"].str.strip() != ""].reset_index(drop=True)
-        if not df_preview.empty and bg_subject.strip() and editor_html_is_meaningful(bg_body_html):
+        bg_preview_missing = missing_preview_requirements(
+            sender_email=bg_sender,
+            has_recipients=not df_preview.empty,
+            subject=bg_subject,
+            body_html=bg_body_html,
+            require_password=False,
+        )
+        if bg_preview_missing:
+            st.info("Vorschau noch nicht verfügbar. Es fehlen: " + ", ".join(bg_preview_missing) + ".")
+        elif preview_ready(
+            sender_email=bg_sender,
+            has_recipients=not df_preview.empty,
+            subject=bg_subject,
+            body_html=bg_body_html,
+            require_password=False,
+        ):
             st.markdown("**Vorschau**")
             preview_labels = [
                 f"{row['firstname']} {row['lastname']} - {row['email']}".strip(" -")
@@ -678,7 +694,7 @@ with st.expander("Badge-Mails speichern oder senden", expanded=False):
                 for _, row in df_preview.iterrows()
             ]
             preview_idx = st.selectbox(
-                "Vorschau fuer Kontakt",
+                "Vorschau für Kontakt",
                 options=range(len(preview_labels)),
                 format_func=lambda i: preview_labels[i],
                 label_visibility="collapsed",
@@ -691,8 +707,9 @@ with st.expander("Badge-Mails speichern oder senden", expanded=False):
                 preview_row.get("company", ""),
                 preview_row.get("email", ""),
             )
-            preview_body = render_personalized_rich_text_html(
+            preview_body = render_final_mail_html(
                 bg_body_html,
+                sender_email=bg_sender.strip(),
                 vorname=preview_row.get("firstname", ""),
                 firma=preview_row.get("company", ""),
                 email=preview_row.get("email", ""),
@@ -705,18 +722,18 @@ with st.expander("Badge-Mails speichern oder senden", expanded=False):
         bg_confirm_word = _BG_CONFIRM_WORD_SEND if bg_is_send_mode else _BG_CONFIRM_WORD_DRAFT
         bg_expected = f"{bg_confirm_word} {n_with_email}"
         bg_confirm = st.text_input(
-            f"Zur Bestaetigung eingeben: **{bg_expected}**",
+            f"Zur Bestätigung eingeben: **{bg_expected}**",
             placeholder=bg_expected,
             key="bg_confirm",
         )
         bg_confirmed = bg_confirm.strip() == bg_expected
 
         if bg_is_send_mode and not bg_smtp_host:
-            st.warning("SMTP-Konfiguration fehlt. Bitte `mse_smtp_mail_send` in den Secrets pruefen.")
+            st.warning("SMTP-Konfiguration fehlt. Bitte `mse_smtp_mail_send` in den Secrets prüfen.")
         elif bg_is_send_mode and not bg_imap_host:
-            st.warning("IMAP-Konfiguration fuer die Sent-Kopie fehlt. Bitte `mse_imap_mail_drafts` in den Secrets pruefen.")
+            st.warning("IMAP-Konfiguration für die Sent-Kopie fehlt. Bitte `mse_imap_mail_drafts` in den Secrets prüfen.")
         elif (not bg_is_send_mode) and not bg_imap_host:
-            st.warning("IMAP-Draft-Konfiguration fehlt. Bitte `mse_imap_mail_drafts` in den Secrets pruefen.")
+            st.warning("IMAP-Draft-Konfiguration fehlt. Bitte `mse_imap_mail_drafts` in den Secrets prüfen.")
 
         bg_ready = (
             bg_confirmed
@@ -728,11 +745,11 @@ with st.expander("Badge-Mails speichern oder senden", expanded=False):
             and bool(bg_imap_host if bg_is_send_mode else True)
         )
 
-        bg_button_label = "E-Mails senden" if bg_is_send_mode else "Entwuerfe erstellen"
+        bg_button_label = "E-Mails senden" if bg_is_send_mode else "Entwürfe erstellen"
         bg_spinner_label = (
             f"Sende {n_with_email} E-Mail(s) ..."
             if bg_is_send_mode
-            else f"Erstelle {n_with_email} Entwurf/Entwuerfe ..."
+            else f"Erstelle {n_with_email} Entwurf/Entwürfe ..."
         )
 
         if st.button(bg_button_label, disabled=not bg_ready, type="primary", key="bg_draft_btn"):
@@ -744,6 +761,7 @@ with st.expander("Badge-Mails speichern oder senden", expanded=False):
                     body_text="",
                     sig_html="",
                     body_html_template=bg_body_html,
+                    sender_email=bg_sender.strip(),
                     tpl_map=tpl_map,
                     uppercase_names=uppercase_names,
                     uppercase_company=uppercase_company,
@@ -805,12 +823,12 @@ with st.expander("Badge-Mails speichern oder senden", expanded=False):
 
         bg_result = st.session_state.get("bg_draft_result")
         if bg_result is not None:
-            bg_mode = bg_result.get("mode", "Entwuerfe")
+            bg_mode = bg_result.get("mode", "Entwürfe")
             bg_results = bg_result.get("results", [])
             bg_skipped = bg_result.get("skipped", [])
             bg_success_status = "sent" if bg_mode == "Senden" else "draft_created"
             bg_success_label = "Gesendet" if bg_mode == "Senden" else "Entwurf gespeichert"
-            bg_summary_label = "E-Mail(s) gesendet" if bg_mode == "Senden" else "Entwurf/Entwuerfe gespeichert"
+            bg_summary_label = "E-Mail(s) gesendet" if bg_mode == "Senden" else "Entwurf/Entwürfe gespeichert"
             bg_show_hint = any(
                 (result.details or "").strip()
                 for result in bg_results
@@ -845,7 +863,7 @@ with st.expander("Badge-Mails speichern oder senden", expanded=False):
                 st.dataframe(pd.DataFrame(result_rows), use_container_width=True, hide_index=True)
 
             if bg_skipped:
-                st.warning(f"{len(bg_skipped)} Person(en) uebersprungen:")
+                st.warning(f"{len(bg_skipped)} Person(en) übersprungen:")
                 skip_rows = [
                     {"Name": item["name"], "E-Mail": item["email"], "Grund": item["reason"]}
                     for item in bg_skipped

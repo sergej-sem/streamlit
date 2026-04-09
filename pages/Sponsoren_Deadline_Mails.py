@@ -19,6 +19,7 @@ from shared.mail_content_guard import (
     assess_html_mail_content,
     evaluate_send_guard,
 )
+from shared.mail_signatures import signature_html_for_sender
 from shared.smtp_sender import SmtpSendConfig
 from sponsor_deadline_mails import (
     DEFAULT_EVENT_CITY,
@@ -44,25 +45,7 @@ from sponsor_deadline_mails.summary_state import (
 )
 from streamlit_ui import render_email_selectbox, render_page_title
 
-st.set_page_config(page_title="Deadline-E-Mails fuer Sponsoren", layout="wide")
-
-_SIGNATURES: dict[str, str] = {
-    "severin.wagner@mysecurityevent.de": (
-        '<p style="font-family:Calibri,Arial,sans-serif;font-size:11pt;margin:0;">'
-        '<b><span style="color:#212121;">Severin Wagner | Operations Manager</span></b></p>'
-        '<p style="font-family:Calibri,Arial,sans-serif;font-size:11pt;margin:0;">&nbsp;</p>'
-        '<p style="font-family:Calibri,Arial,sans-serif;font-size:11pt;margin:0;">'
-        '<a href="tel:+491793922128" style="color:#0078D4;">+49 179 3922 128</a></p>'
-        '<p style="font-family:Calibri,Arial,sans-serif;font-size:11pt;margin:0;color:#212121;">'
-        '<br>mysecurityevent GmbH</p>'
-        '<p style="font-family:Calibri,Arial,sans-serif;font-size:11pt;margin:0;color:#212121;">'
-        "Office: Novalisstrasse 11</p>"
-        '<p style="font-family:Calibri,Arial,sans-serif;font-size:11pt;margin:0;">'
-        '10115 Berlin&nbsp;|&nbsp;<a href="tel:+493052284088" style="color:#0078D4;">+49 30 52284088</a></p>'
-        '<p style="font-family:Calibri,Arial,sans-serif;font-size:11pt;margin:0;color:#212121;">'
-        "Amtsgericht Charlottenburg | HRB244080B</p>"
-    ),
-}
+st.set_page_config(page_title="Deadline-E-Mails für Sponsoren", layout="wide")
 
 SENDER_EMAIL_SUGGESTIONS = [
     "severin.wagner@mysecurityevent.de",
@@ -162,7 +145,7 @@ def _show_guard_feedback(feedback) -> None:
         return
     text = feedback.message
     if feedback.reasons:
-        text += " Gruende: " + "; ".join(feedback.reasons[:3])
+        text += " Gründe: " + "; ".join(feedback.reasons[:3])
     if feedback.level == "error":
         st.error(text)
     elif feedback.level == "warning":
@@ -211,15 +194,15 @@ base_imap_config = _load_base_imap_config()
 base_sent_folder = _load_base_sent_folder()
 base_smtp_config = _load_base_smtp_config()
 
-render_page_title("Deadline-E-Mails fuer Sponsoren")
+render_page_title("Deadline-E-Mails für Sponsoren")
 st.caption(
-    "Sponsoren-Datei hochladen, E-Mails erstellen, Vorschau pruefen und wahlweise als Entwurf speichern oder senden."
+    "Sponsoren-Datei hochladen, E-Mails erstellen, Vorschau prüfen und wahlweise als Entwurf speichern oder senden."
 )
 
 if base_imap_config is None and base_smtp_config is None:
     st.error(
-        "Fuer diese Seite ist weder eine IMAP-Draft- noch eine SMTP-Send-Konfiguration eingerichtet. "
-        "Bitte lass die technische Konfiguration pruefen."
+        "Für diese Seite ist weder eine IMAP-Draft- noch eine SMTP-Send-Konfiguration eingerichtet. "
+        "Bitte lass die technische Konfiguration prüfen."
     )
     st.stop()
 
@@ -258,7 +241,7 @@ with date_col:
 with cred_col:
     sender_email = render_email_selectbox(
         "E-Mail-Adresse",
-        help="Mit dieser Adresse werden Entwuerfe gespeichert oder E-Mails versendet.",
+        help="Mit dieser Adresse werden Entwürfe gespeichert oder E-Mails versendet.",
         key="sdm_sender_email",
         suggestions=SENDER_EMAIL_SUGGESTIONS,
         placeholder="vorname.nachname@mysecurityevent.de",
@@ -266,14 +249,14 @@ with cred_col:
     sender_password = st.text_input(
         "E-Mail-Passwort",
         type="password",
-        help="Das Passwort fuer dieses Postfach.",
+        help="Das Passwort für dieses Postfach.",
     )
     st.markdown("<div style='margin-top: 1.7rem'></div>", unsafe_allow_html=True)
     generate_clicked = st.button("Generieren", type="primary", use_container_width=True)
 
 if generate_clicked:
     if not isinstance(event_start, date) or not isinstance(event_end, date):
-        st.error("Bitte gueltige Event-Daten angeben.")
+        st.error("Bitte gültige Event-Daten angeben.")
     elif event_end < event_start:
         st.error("Das Event-Ende darf nicht vor dem Event-Start liegen.")
     else:
@@ -284,7 +267,7 @@ if generate_clicked:
                 event_city=event_city.strip() or DEFAULT_EVENT_CITY,
                 event_start=event_start,
                 event_end=event_end,
-                signature_html=_SIGNATURES.get(sender_email.strip().lower(), ""),
+                signature_html=signature_html_for_sender(sender_email),
             )
         except Exception as exc:
             st.error(f"Generierung fehlgeschlagen: {exc}")
@@ -301,7 +284,7 @@ if generate_clicked:
 
 result = st.session_state["sdm_result"]
 if result is None:
-    st.info("Klicke auf 'Generieren', um die E-Mails zu erstellen und vorab zu pruefen.")
+    st.info("Klicke auf 'Generieren', um die E-Mails zu erstellen und vorab zu prüfen.")
     st.stop()
 
 if not result.mails:
@@ -331,7 +314,7 @@ if default_preview_mail_number not in mail_by_number and preview_options:
 with preview_col:
     st.subheader("Vorschau")
     preview_mail_number = st.selectbox(
-        "Sponsor auswaehlen",
+        "Sponsor auswählen",
         options=preview_options,
         key="sdm_preview_mail_number",
         format_func=lambda mail_number: _mail_label(mail_number, mail_by_number[mail_number]),
@@ -355,7 +338,7 @@ selected_mails = [
     if mail_number in mail_by_number
 ]
 selected_count = len(selected_mails)
-st.caption("Es werden nur die aktuell ausgewaehlten Sponsoren beruecksichtigt.")
+st.caption("Es werden nur die aktuell ausgewählten Sponsoren berücksichtigt.")
 
 mail_mode = st.radio(
     "Modus",
@@ -374,34 +357,34 @@ if not sender_email:
 elif not sender_password:
     st.warning("Bitte gib Dein E-Mail-Passwort ein.")
 elif is_send_mode and base_smtp_config is None:
-    st.error("SMTP-Senden ist aktuell nicht eingerichtet. Bitte `mse_smtp_mail_send` pruefen.")
+    st.error("SMTP-Senden ist aktuell nicht eingerichtet. Bitte `mse_smtp_mail_send` prüfen.")
 elif is_send_mode and base_imap_config is None:
-    st.error("IMAP-Konfiguration fuer die Sent-Kopie fehlt. Bitte `mse_imap_mail_drafts` pruefen.")
+    st.error("IMAP-Konfiguration für die Sent-Kopie fehlt. Bitte `mse_imap_mail_drafts` prüfen.")
 elif (not is_send_mode) and base_imap_config is None:
-    st.error("IMAP-Drafts sind aktuell nicht eingerichtet. Bitte `mse_imap_mail_drafts` pruefen.")
+    st.error("IMAP-Drafts sind aktuell nicht eingerichtet. Bitte `mse_imap_mail_drafts` prüfen.")
 elif (not is_send_mode) and not base_imap_config.drafts_folder.strip():
-    st.error("Der Ordner fuer Entwuerfe ist aktuell nicht richtig eingerichtet. Bitte lass die Konfiguration pruefen.")
+    st.error("Der Ordner für Entwürfe ist aktuell nicht richtig eingerichtet. Bitte lass die Konfiguration prüfen.")
 elif not selected_mails:
-    st.warning("Bitte mindestens einen Sponsor in der Tabelle auswaehlen.")
+    st.warning("Bitte mindestens einen Sponsor in der Tabelle auswählen.")
 else:
     if is_send_mode:
-        st.info("Die ausgewaehlten E-Mails werden direkt per SMTP versendet.")
+        st.info("Die ausgewählten E-Mails werden direkt per SMTP versendet.")
     else:
-        st.info("Die Entwuerfe werden in Deinem Postfach gespeichert.")
+        st.info("Die Entwürfe werden in Deinem Postfach gespeichert.")
 
     preview_assessment = assess_html_mail_content(preview_mail.subject, preview_mail.html_body)
     _show_guard_feedback(evaluate_send_guard(mail_mode, preview_assessment))
 
     confirm_text = st.text_input(
-        f"Bestaetigung: Bitte exakt {expected_confirmation} eintippen",
+        f"Bestätigung: Bitte exakt {expected_confirmation} eintippen",
         value="",
         help=f"Erwartet wird exakt: {expected_confirmation}",
     )
     allow_run = confirm_text.strip() == expected_confirmation
     if not allow_run:
-        st.warning(f"Zum Ausfuehren bitte exakt {expected_confirmation} eingeben.")
+        st.warning(f"Zum Ausführen bitte exakt {expected_confirmation} eingeben.")
 
-    button_label = "Ausgewaehlte E-Mails senden" if is_send_mode else "Ausgewaehlte Entwuerfe speichern"
+    button_label = "Ausgewählte E-Mails senden" if is_send_mode else "Ausgewählte Entwürfe speichern"
     if st.button(
         button_label,
         type="primary",
@@ -427,7 +410,7 @@ else:
                 "Run-ID": f"SDM-{run_started_utc.strftime('%Y%m%dT%H%M%SZ')}-{uuid4().hex[:8]}",
                 "Modus": "SENDEN" if is_send_mode else "DRAFTS",
                 "Zeitpunkt UTC": run_started_utc.replace(microsecond=0).isoformat().replace("+00:00", "Z"),
-                "Ausgewaehlte Mails": selected_count,
+                "Ausgewählte Mails": selected_count,
                 "Sheet": sheet_name,
                 "Event": f"{event_city.strip() or DEFAULT_EVENT_CITY} | {event_start.isoformat()} bis {event_end.isoformat()}",
                 "Sender": sender_email,
@@ -470,7 +453,7 @@ else:
             except Exception as exc:
                 st.session_state["sdm_mail_run_error"] = str(exc)
                 st.error(
-                    f"{'Die E-Mails konnten nicht gesendet werden' if is_send_mode else 'Die Entwuerfe konnten nicht gespeichert werden'}: {exc}"
+                    f"{'Die E-Mails konnten nicht gesendet werden' if is_send_mode else 'Die Entwürfe konnten nicht gespeichert werden'}: {exc}"
                 )
             else:
                 st.session_state["sdm_mail_log_records"] = records
@@ -480,11 +463,11 @@ else:
                 warning_count = sum(record.result == success_status and (record.details or "").strip() for record in records)
                 if error_count:
                     st.warning(
-                        f"{'Gesendet' if is_send_mode else 'Entwuerfe gespeichert'}: {success_count}, Hinweise: {warning_count}, Fehler: {error_count}"
+                        f"{'Gesendet' if is_send_mode else 'Entwürfe gespeichert'}: {success_count}, Hinweise: {warning_count}, Fehler: {error_count}"
                     )
                 else:
                     st.success(
-                        f"{'Gesendet' if is_send_mode else 'Entwuerfe gespeichert'}: {success_count}"
+                        f"{'Gesendet' if is_send_mode else 'Entwürfe gespeichert'}: {success_count}"
                         + (f", Hinweise: {warning_count}" if warning_count else "")
                     )
 
@@ -502,7 +485,7 @@ if mail_log_records or mail_run_error:
         success_count = sum(record.result == success_status for record in mail_log_records)
         error_count = total_count - success_count
     else:
-        total_count = int((mail_run_context or {}).get("Ausgewaehlte Mails", 0))
+        total_count = int((mail_run_context or {}).get("Ausgewählte Mails", 0))
         success_count = 0
         error_count = total_count
 

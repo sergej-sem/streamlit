@@ -110,7 +110,7 @@ class SerienmailingPreviewHelperTests(unittest.TestCase):
             (
                 "Absenderadresse",
                 "Passwort",
-                "mindestens ein Empfaenger",
+                "mindestens ein Empfänger",
                 "Betreff",
                 "Nachrichtenbody",
             ),

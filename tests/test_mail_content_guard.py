@@ -26,7 +26,7 @@ class AssessMailContentTests(unittest.TestCase):
             (
                 "Hallo Frau Beispiel,\n\n"
                 "ich sende Ihnen die aktuellen Informationen zum Event in Berlin. "
-                "Bitte geben Sie mir kurz Bescheid, falls noch Rueckfragen offen sind.\n\n"
+                "Bitte geben Sie mir kurz Bescheid, falls noch Rückfragen offen sind.\n\n"
                 "Beste Grüße,"
             ),
         )
@@ -44,6 +44,18 @@ class AssessMailContentTests(unittest.TestCase):
             _notification_html_body("Eva", "Schmidt"),
         )
         self.assertFalse(result.blocked)
+
+    def test_link_heavy_call_to_action_message_is_flagged(self):
+        result = assess_html_mail_content(
+            "Jetzt klicken",
+            (
+                '<p>Klicke jetzt hier:</p>'
+                '<p><a href="https://bit.ly/example">Link 1</a></p>'
+                '<p><a href="https://bit.ly/example2">Link 2</a></p>'
+            ),
+        )
+        self.assertIn(result.risk_level, {"mittel", "hoch"})
+        self.assertTrue(any("Link" in reason or "Call-to-Action" in reason for reason in result.reasons))
 
 
 class AssessMailBatchTests(unittest.TestCase):

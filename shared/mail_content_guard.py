@@ -20,6 +20,15 @@ _CLOSING_RE = re.compile(
     re.IGNORECASE,
 )
 _LINK_RE = re.compile(r"(https?://|www\.)", re.IGNORECASE)
+_HTML_LINK_TAG_RE = re.compile(r"<a\b", re.IGNORECASE)
+_URL_SHORTENER_RE = re.compile(
+    r"\b(?:bit\.ly|tinyurl\.com|t\.co|goo\.gl|ow\.ly|buff\.ly|lnkd\.in|is\.gd|cutt\.ly)\b",
+    re.IGNORECASE,
+)
+_CTA_RE = re.compile(
+    r"\b(?:act now|click here|jetzt klicken|sofort|dringend|last chance|nur heute|limited time|offer|angebot|buy now|kostenlos|gratis|free)\b",
+    re.IGNORECASE,
+)
 _WORD_RE = re.compile(r"[A-Za-z0-9]+")
 
 
@@ -71,6 +80,16 @@ def _risk_level_for_score(score: int) -> str:
     return "niedrig"
 
 
+def _build_assessment(score: int, blocked: bool, reasons: list[str]) -> MailContentAssessment:
+    normalized_score = max(score, 0)
+    return MailContentAssessment(
+        risk_level=_risk_level_for_score(normalized_score),
+        score=normalized_score,
+        blocked=blocked,
+        reasons=tuple(reasons),
+    )
+
+
 def assess_mail_content(subject: str, body_text: str) -> MailContentAssessment:
     normalized_subject = _normalize_text(subject)
     normalized_body = _normalize_text(body_text)
@@ -93,6 +112,7 @@ def assess_mail_content(subject: str, body_text: str) -> MailContentAssessment:
     )
     sentence_markers = sum(normalized_body.count(marker) for marker in ".!?")
     link_count = len(_LINK_RE.findall(normalized_body))
+    cta_count = len(_CTA_RE.findall(normalized_body))
     reasons: list[str] = []
     score = 0
 
@@ -104,7 +124,7 @@ def assess_mail_content(subject: str, body_text: str) -> MailContentAssessment:
         _add_reason(reasons, "Betreff ist zu kurz.")
     elif len(normalized_subject) < 10:
         score += 2
-        _add_reason(reasons, "Betreff ist wenig aussagekraeftig.")
+        _add_reason(reasons, "Betreff ist wenig aussagekräftig.")
 
     if not normalized_body:
         score += 7
@@ -120,7 +140,7 @@ def assess_mail_content(subject: str, body_text: str) -> MailContentAssessment:
         _add_reason(reasons, "Text wirkt sehr knapp.")
     elif len(body_words) <= 10 and len(non_empty_lines) <= 1:
         score += 2
-        _add_reason(reasons, "Text ist fuer eine normale Geschaeftsmail sehr knapp.")
+        _add_reason(reasons, "Text ist für eine normale Geschäftsmail sehr knapp.")
 
     if normalized_body and len(non_empty_lines) <= 1 and len(normalized_body) < 24:
         score += 2
@@ -137,26 +157,54 @@ def assess_mail_content(subject: str, body_text: str) -> MailContentAssessment:
         and not (_GREETING_RE.search(normalized_body) or _CLOSING_RE.search(normalized_body))
     ):
         score += 1
-        _add_reason(reasons, "Text wirkt ungewoehnlich knapp und ohne normale Grussstruktur.")
+        _add_reason(reasons, "Text wirkt ungewöhnlich knapp und ohne normale Grußstruktur.")
 
     if normalized_body.count("!") >= 4:
         score += 1
-        _add_reason(reasons, "Text enthaelt auffaellig viele Ausrufezeichen.")
+        _add_reason(reasons, "Text enthält auffällig viele Ausrufezeichen.")
 
     if len(letter_chars) >= 10 and upper_ratio >= 0.45:
         score += 2
-        _add_reason(reasons, "Text enthaelt ungewoehnlich viel Grossschreibung.")
+        _add_reason(reasons, "Text enthält ungewöhnlich viel Großschreibung.")
 
     if link_count >= 3:
         score += 2
-        _add_reason(reasons, "Text enthaelt ungewoehnlich viele Links.")
+        _add_reason(reasons, "Text enthält ungewöhnlich viele Links.")
     elif link_count == 2:
         score += 1
-        _add_reason(reasons, "Text enthaelt mehrere Links.")
+        _add_reason(reasons, "Text enthält mehrere Links.")
 
     if len(normalized_body) >= 20 and special_ratio >= 0.2:
         score += 1
-        _add_reason(reasons, "Text enthaelt ungewoehnlich viele Sonderzeichen.")
+        _add_reason(reasons, "Text enthält ungewöhnlich viele Sonderzeichen.")
+
+    if cta_count >= 2:
+        score += 2
+        _add_reason(reasons, "Text wirkt stark call-to-action-lastig.")
+    elif cta_count == 1 and len(body_words) <= 20:
+        score += 1
+        _add_reason(reasons, "Text enthält eine auffällige Call-to-Action.")
+
+    if _URL_SHORTENER_RE.search(normalized_body):
+        score += 2
+        _add_reason(reasons, "Text enthält URL-Shortener.")
+
+    repeated_terms = [
+        word
+        for word in {word.casefold() for word in body_words}
+        if len(word) >= 4 and body_lower.count(word) >= 3
+    ]
+    if repeated_terms:
+        score += 1
+        _add_reason(reasons, "Text enthält auffällige Wiederholungen.")
+
+    if (
+        len(body_words) >= 16
+        and sentence_markers >= 2
+        and _GREETING_RE.search(normalized_body)
+        and _CLOSING_RE.search(normalized_body)
+    ):
+        score -= 1
 
     blocked = (
         body_lower in _GENERIC_TEST_TERMS
@@ -165,16 +213,35 @@ def assess_mail_content(subject: str, body_text: str) -> MailContentAssessment:
         or (score >= 10 and len(body_words) <= 5)
     )
 
-    return MailContentAssessment(
-        risk_level=_risk_level_for_score(score),
-        score=score,
-        blocked=blocked,
-        reasons=tuple(reasons),
-    )
+    return _build_assessment(score, blocked, reasons)
 
 
 def assess_html_mail_content(subject: str, html_body: str) -> MailContentAssessment:
-    return assess_mail_content(subject, html_to_plain_text(html_body))
+    body_text = html_to_plain_text(html_body)
+    assessment = assess_mail_content(subject, body_text)
+    reasons = list(assessment.reasons)
+    score = assessment.score
+    body_words = _WORD_RE.findall(_normalize_text(body_text))
+    anchor_count = len(_HTML_LINK_TAG_RE.findall(str(html_body or "")))
+
+    if _URL_SHORTENER_RE.search(str(html_body or "")):
+        score += 2
+        _add_reason(reasons, "Text enthält URL-Shortener.")
+
+    if anchor_count >= 3:
+        score += 2
+        _add_reason(reasons, "HTML enthält ungewöhnlich viele Links.")
+    elif anchor_count >= 2 and len(body_words) <= 12:
+        score += 2
+        _add_reason(reasons, "Text besteht fast nur aus Links oder Calls-to-Action.")
+
+    visible_text = _normalize_text(body_text)
+    compact_html = re.sub(r"\s+", "", str(html_body or ""))
+    if compact_html and visible_text and len(compact_html) / max(len(visible_text), 1) >= 12 and len(visible_text) < 80:
+        score += 1
+        _add_reason(reasons, "HTML enthält sehr wenig sichtbaren Text.")
+
+    return _build_assessment(score, assessment.blocked, reasons)
 
 
 def assess_mail_batch(items: Iterable[tuple[str, str]]) -> MailBatchAssessment:
@@ -223,7 +290,7 @@ def evaluate_send_guard(mode: str, assessment: MailContentAssessment | MailBatch
         return MailGuardFeedback(
             blocked=True,
             level="error",
-            message="Spam-Risiko: hoch. Der Versand ist blockiert, weil der Inhalt testartig oder deutlich zu duenn wirkt.",
+            message="Spam-Risiko: hoch. Der Versand ist blockiert, weil der Inhalt testartig oder deutlich zu dünn wirkt.",
             reasons=reasons,
         )
 

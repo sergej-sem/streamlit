@@ -139,6 +139,19 @@ class BuildBadgeMailsTests(unittest.TestCase):
         self.assertIn("<strong>Hallo Eva</strong>", mails[0].html_body)
         self.assertNotIn("Severin Wagner", mails[0].html_body)
 
+    def test_rich_text_body_template_appends_sender_signature_once(self):
+        df = self._df([_row(firstname="Eva", company="Corp")])
+        mails, _ = build_badge_mails(
+            df,
+            "Betreff",
+            "",
+            "",
+            self._tpl_map,
+            body_html_template="<p><strong>Hallo {vorname}</strong></p><p><br></p><p>Beste Grüße,</p>",
+            sender_email="severin.wagner@mysecurityevent.de",
+        )
+        self.assertEqual(1, mails[0].html_body.count("Severin Wagner"))
+
     # ── mixed input ─────────────────────────────────────────────────────────
 
     def test_returns_correct_counts_mixed(self):

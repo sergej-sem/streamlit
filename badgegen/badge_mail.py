@@ -12,7 +12,7 @@ import pandas as pd
 from badgegen.render_pdf import render_badges_pdf_bytes
 from serienmailing.imap_sender import SerienMail
 from serienmailing.mail_builder import build_html_body, build_subject
-from shared.mail_rich_text import render_personalized_rich_text_html
+from shared.mail_rich_text import render_final_mail_html
 
 
 def _safe_filename(firstname: str, lastname: str) -> str:
@@ -45,6 +45,7 @@ def build_badge_mails(
     tpl_map: dict,
     body_html_template: str | None = None,
     *,
+    sender_email: str = "",
     uppercase_names: bool = True,
     uppercase_company: bool = True,
     colored_qr: bool = True,
@@ -104,8 +105,10 @@ def build_badge_mails(
             firma=company,
             subject=build_subject(subject_tpl, firstname, company, email),
             html_body=(
-                render_personalized_rich_text_html(
+                render_final_mail_html(
                     body_html_template,
+                    sender_email=sender_email,
+                    explicit_signature_html=sig_html,
                     vorname=firstname,
                     firma=company,
                     email=email,

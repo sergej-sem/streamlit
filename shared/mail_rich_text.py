@@ -12,6 +12,7 @@ except ModuleNotFoundError:
     CSSSanitizer = None
 
 from serienmailing.mail_builder import html_to_plain_text
+from shared.mail_signatures import known_signature_html_values, signature_html_for_sender
 
 _DEFAULT_BODY_TEXT = "\n\nBeste Grüße,"
 _DEFAULT_EDITOR_HTML = "<p><br></p><p><br></p><p>Beste Grüße,</p>"
@@ -285,3 +286,76 @@ def render_personalized_rich_text_html(
         f"{cleaned}"
         "</div>"
     )
+
+
+def _normalized_html_fragment(value: str | None) -> str:
+    return re.sub(r"\s+", "", str(value or "")).strip()
+
+
+def _normalized_text_fragment(value: str | None) -> str:
+    return re.sub(r"\s+", " ", html_to_plain_text(str(value or ""))).strip()
+
+
+def _body_contains_html_fragment(body_html: str | None, fragment_html: str | None) -> bool:
+    normalized_fragment = _normalized_html_fragment(fragment_html)
+    normalized_body = _normalized_html_fragment(body_html)
+    if normalized_fragment and normalized_fragment in normalized_body:
+        return True
+
+    text_fragment = _normalized_text_fragment(fragment_html)
+    if not text_fragment:
+        return False
+    return text_fragment in _normalized_text_fragment(body_html)
+
+
+def _choose_signature_html(
+    *,
+    body_html: str,
+    sender_email: str,
+    explicit_signature_html: str,
+) -> str:
+    explicit_signature = str(explicit_signature_html or "").strip()
+    default_signature = signature_html_for_sender(sender_email)
+    chosen_signature = explicit_signature or default_signature
+    if not chosen_signature:
+        return ""
+    if _body_contains_html_fragment(body_html, chosen_signature):
+        return ""
+    if explicit_signature and _body_contains_html_fragment(body_html, explicit_signature):
+        return ""
+    if any(_body_contains_html_fragment(body_html, known_signature) for known_signature in known_signature_html_values()):
+        return ""
+    return chosen_signature
+
+
+def _append_signature_block(body_html: str, signature_html: str) -> str:
+    if not signature_html.strip():
+        return body_html
+
+    signature_block = f'<div style="margin-top:16px;">{signature_html}</div>'
+    if body_html.rstrip().endswith("</div>"):
+        return f"{body_html.rstrip()[:-6]}{signature_block}</div>"
+    return body_html + signature_block
+
+
+def render_final_mail_html(
+    template_html: str | None,
+    *,
+    sender_email: str = "",
+    explicit_signature_html: str = "",
+    vorname: str = "",
+    firma: str = "",
+    email: str = "",
+) -> str:
+    personalized_body = render_personalized_rich_text_html(
+        template_html,
+        vorname=vorname,
+        firma=firma,
+        email=email,
+    )
+    signature_html = _choose_signature_html(
+        body_html=personalized_body,
+        sender_email=sender_email,
+        explicit_signature_html=explicit_signature_html,
+    )
+    return _append_signature_block(personalized_body, signature_html)

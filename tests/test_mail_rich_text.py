@@ -4,11 +4,13 @@ import unittest
 
 sys.path.insert(0, os.path.normpath(os.path.join(os.path.dirname(__file__), "..")))
 
+from shared.mail_signatures import SIGNATURE_SEVERIN_HTML
 from shared.mail_rich_text import (
     default_mail_body_html,
     default_mail_body_text,
     editor_html_is_meaningful,
     plain_text_to_editor_html,
+    render_final_mail_html,
     render_personalized_rich_text_html,
     sanitize_editor_html,
 )
@@ -53,6 +55,26 @@ class MailRichTextSanitizationTests(unittest.TestCase):
     def test_editor_html_is_meaningful_detects_empty_editor_markup(self):
         self.assertFalse(editor_html_is_meaningful("<p><br></p>"))
         self.assertTrue(editor_html_is_meaningful(default_mail_body_html()))
+
+    def test_render_final_mail_html_appends_sender_signature(self):
+        rendered = render_final_mail_html(
+            "<p>Hallo {vorname}</p><p><br></p><p>Beste Grüße,</p>",
+            sender_email="severin.wagner@mysecurityevent.de",
+            vorname="Jörg",
+        )
+        self.assertIn("Severin Wagner", rendered)
+        self.assertEqual(1, rendered.count("Severin Wagner"))
+
+    def test_render_final_mail_html_does_not_duplicate_existing_signature(self):
+        rendered = render_final_mail_html(
+            (
+                "<p>Hallo {vorname}</p><p><br></p><p>Beste Grüße,</p>"
+                f"{SIGNATURE_SEVERIN_HTML}"
+            ),
+            sender_email="severin.wagner@mysecurityevent.de",
+            vorname="Jörg",
+        )
+        self.assertEqual(1, rendered.count("Severin Wagner"))
 
 
 class StreamlitQuillImportTests(unittest.TestCase):

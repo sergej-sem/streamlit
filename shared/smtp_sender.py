@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import random
 import re
 import socket
 import smtplib
@@ -22,6 +23,8 @@ class SmtpSendConfig:
     use_starttls: bool = False
     timeout_seconds: int = 30
     delay_between_messages_seconds: float = 0.75
+    delay_between_messages_seconds_min: float | None = 3.0
+    delay_between_messages_seconds_max: float | None = 6.0
 
 
 @dataclass(frozen=True)
@@ -48,13 +51,13 @@ def _friendly_smtp_error(raw: str) -> str:
         or "smtp authentication error" in text
         or "5.7.8" in text
     ):
-        return "Anmeldung fehlgeschlagen. Bitte E-Mail-Adresse und Passwort pruefen."
+        return "Anmeldung fehlgeschlagen. Bitte E-Mail-Adresse und Passwort prüfen."
     if "starttls" in text or "tls" in text or "ssl" in text:
-        return "Die gesicherte Verbindung zum Mailserver ist fehlgeschlagen. Bitte die SMTP-Konfiguration pruefen."
+        return "Die gesicherte Verbindung zum Mailserver ist fehlgeschlagen. Bitte die SMTP-Konfiguration prüfen."
     if "connection refused" in text or "timed out" in text or "getaddrinfo failed" in text or "errno" in text:
-        return "Verbindung zum SMTP-Server fehlgeschlagen. Bitte Netzwerk und Serveradresse pruefen."
+        return "Verbindung zum SMTP-Server fehlgeschlagen. Bitte Netzwerk und Serveradresse prüfen."
     if "refused" in text or "rejected" in text:
-        return "Mindestens ein Empfaenger wurde vom Mailserver abgelehnt."
+        return "Mindestens ein Empfänger wurde vom Mailserver abgelehnt."
     return raw
 
 
@@ -129,6 +132,49 @@ def _connect(config: SmtpSendConfig):
     return client
 
 
+def _resolve_delay_range(config: SmtpSendConfig) -> tuple[float, float] | None:
+    has_range = (
+        config.delay_between_messages_seconds_min is not None
+        or config.delay_between_messages_seconds_max is not None
+    )
+    if has_range:
+        min_value = (
+            float(config.delay_between_messages_seconds_min)
+            if config.delay_between_messages_seconds_min is not None
+            else float(config.delay_between_messages_seconds_max or 0)
+        )
+        max_value = (
+            float(config.delay_between_messages_seconds_max)
+            if config.delay_between_messages_seconds_max is not None
+            else float(config.delay_between_messages_seconds_min or 0)
+        )
+    else:
+        fixed_value = float(config.delay_between_messages_seconds)
+        min_value = fixed_value
+        max_value = fixed_value
+
+    if min_value <= 0 and max_value <= 0:
+        return None
+
+    min_value = max(min_value, 0.0)
+    max_value = max(max_value, 0.0)
+    if min_value > max_value:
+        min_value, max_value = max_value, min_value
+    return min_value, max_value
+
+
+def _next_send_delay_seconds(config: SmtpSendConfig) -> float | None:
+    delay_range = _resolve_delay_range(config)
+    if delay_range is None:
+        return None
+    min_value, max_value = delay_range
+    if max_value <= 0:
+        return None
+    if min_value == max_value:
+        return max_value
+    return random.uniform(min_value, max_value)
+
+
 def send_email_messages(
     messages: list[PreparedEmailMessage],
     config: SmtpSendConfig,
@@ -165,7 +211,7 @@ def send_email_messages(
 
                 recipients = _envelope_recipients(item.message)
                 if not recipients:
-                    raise RuntimeError("Es konnte kein gueltiger Empfaenger fuer den Versand ermittelt werden.")
+                    raise RuntimeError("Es konnte kein gültiger Empfänger für den Versand ermittelt werden.")
 
                 message_to_send = _message_for_transport(item.message)
                 refused = connection.send_message(
@@ -174,7 +220,7 @@ def send_email_messages(
                     to_addrs=recipients,
                 )
                 if refused:
-                    raise RuntimeError("Mindestens ein Empfaenger wurde vom Mailserver abgelehnt.")
+                    raise RuntimeError("Mindestens ein Empfänger wurde vom Mailserver abgelehnt.")
                 details = ""
                 if sent_copy_config is not None:
                     try:
@@ -198,11 +244,10 @@ def send_email_messages(
                         details=_friendly_smtp_error(str(exc)),
                     )
                 )
-            if (
-                index < total_messages - 1
-                and config.delay_between_messages_seconds > 0
-            ):
-                time.sleep(config.delay_between_messages_seconds)
+            if index < total_messages - 1:
+                delay_seconds = _next_send_delay_seconds(config)
+                if delay_seconds is not None:
+                    time.sleep(delay_seconds)
     finally:
         try:
             connection.quit()

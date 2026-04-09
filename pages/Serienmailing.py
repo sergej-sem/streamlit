@@ -41,8 +41,8 @@ from shared.mail_content_guard import (
 from shared.mail_rich_text import (
     editor_html_is_meaningful,
     plain_text_to_editor_html,
+    render_final_mail_html,
     render_mail_rich_text_editor,
-    render_personalized_rich_text_html,
 )
 from shared.smtp_sender import SmtpSendConfig
 from streamlit_ui import render_email_selectbox
@@ -103,7 +103,7 @@ def _show_guard_feedback(feedback) -> None:
         return
     text = feedback.message
     if feedback.reasons:
-        text += " Gruende: " + "; ".join(feedback.reasons[:3])
+        text += " Gründe: " + "; ".join(feedback.reasons[:3])
     if feedback.level == "error":
         st.error(text)
     elif feedback.level == "warning":
@@ -194,7 +194,7 @@ with tab_hs:
                     except Exception as exc:
                         st.error(f"HubSpot-Fehler: {exc}")
     except Exception as exc:
-        st.warning(f"HubSpot nicht verf\u00fcgbar: {exc}")
+        st.warning(f"HubSpot nicht verfügbar: {exc}")
 
 with tab_manual:
     manual_template = pd.DataFrame({"vorname": [""], "firma": [""], "email": [""]})
@@ -251,7 +251,7 @@ preview_missing = missing_preview_requirements(
     body_html=mail_body_html,
 )
 if preview_missing:
-    st.info("Vorschau noch nicht verfuegbar. Es fehlen: " + ", ".join(preview_missing) + ".")
+    st.info("Vorschau noch nicht verfügbar. Es fehlen: " + ", ".join(preview_missing) + ".")
 elif preview_ready(
     sender_email=sender_email,
     sender_password=sender_password,
@@ -265,15 +265,16 @@ elif preview_ready(
         for _, row in contacts_df.iterrows()
     ]
     preview_idx = st.selectbox(
-        "Vorschau fuer Kontakt",
+        "Vorschau für Kontakt",
         options=range(len(preview_labels)),
         format_func=lambda i: preview_labels[i],
         label_visibility="collapsed",
     )
     preview_row = contacts_df.iloc[preview_idx]
     preview_subject = build_subject(subject_tpl, preview_row["vorname"], preview_row["firma"], preview_row["email"])
-    preview_body = render_personalized_rich_text_html(
+    preview_body = render_final_mail_html(
         mail_body_html,
+        sender_email=sender_email.strip(),
         vorname=preview_row["vorname"],
         firma=preview_row["firma"],
         email=preview_row["email"],
@@ -304,18 +305,18 @@ if st.session_state.get("sm_confirm_expected") != expected_confirm:
     st.session_state["sm_confirm_expected"] = expected_confirm
 
 confirm_input = st.text_input(
-    f"Zur Bestaetigung eingeben: **{expected_confirm}**",
+    f"Zur Bestätigung eingeben: **{expected_confirm}**",
     placeholder=expected_confirm,
     key="sm_confirm_input",
 )
 confirmed = confirm_input.strip() == expected_confirm and n_contacts > 0
 
 if is_send_mode and not smtp_host:
-    st.warning("SMTP-Konfiguration fehlt. Bitte `mse_smtp_mail_send` in den Secrets pruefen.")
+    st.warning("SMTP-Konfiguration fehlt. Bitte `mse_smtp_mail_send` in den Secrets prüfen.")
 elif is_send_mode and not imap_host:
-    st.warning("IMAP-Konfiguration fuer die Sent-Kopie fehlt. Bitte `mse_imap_mail_drafts` in den Secrets pruefen.")
+    st.warning("IMAP-Konfiguration für die Sent-Kopie fehlt. Bitte `mse_imap_mail_drafts` in den Secrets prüfen.")
 elif (not is_send_mode) and not imap_host:
-    st.warning("IMAP-Draft-Konfiguration fehlt. Bitte `mse_imap_mail_drafts` in den Secrets pruefen.")
+    st.warning("IMAP-Draft-Konfiguration fehlt. Bitte `mse_imap_mail_drafts` in den Secrets prüfen.")
 
 ready = (
     confirmed
@@ -327,8 +328,8 @@ ready = (
     and bool(imap_host if is_send_mode else True)
 )
 
-button_label = "E-Mails senden" if is_send_mode else "Entwuerfe erstellen"
-spinner_label = "E-Mails werden gesendet ..." if is_send_mode else "Entwuerfe werden erstellt ..."
+button_label = "E-Mails senden" if is_send_mode else "Entwürfe erstellen"
+spinner_label = "E-Mails werden gesendet ..." if is_send_mode else "Entwürfe werden erstellt ..."
 
 if st.button(button_label, disabled=not ready, type="primary"):
     st.session_state["sm_mail_result"] = None
@@ -340,8 +341,9 @@ if st.button(button_label, disabled=not ready, type="primary"):
             vorname=row["vorname"],
             firma=row["firma"],
             subject=build_subject(subject_tpl, row["vorname"], row["firma"], row["email"]),
-            html_body=render_personalized_rich_text_html(
+            html_body=render_final_mail_html(
                 mail_body_html,
+                sender_email=sender_email.strip(),
                 vorname=row["vorname"],
                 firma=row["firma"],
                 email=row["email"],
@@ -404,7 +406,7 @@ if st.button(button_label, disabled=not ready, type="primary"):
 
 mail_result = st.session_state.get("sm_mail_result")
 if mail_result:
-    result_mode = mail_result.get("mode", "Entwuerfe")
+    result_mode = mail_result.get("mode", "Entwürfe")
     results = mail_result.get("results", [])
     summary_level, summary_text, success_label, show_hint = summarize_mail_results(results, result_mode)
 

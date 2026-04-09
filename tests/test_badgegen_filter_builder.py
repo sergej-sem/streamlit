@@ -1,24 +1,50 @@
-import unittest
 import sys
-from types import SimpleNamespace
+import unittest
+from importlib.util import module_from_spec, spec_from_file_location
+from pathlib import Path
+from types import ModuleType
 from unittest.mock import patch
 
-if "streamlit" not in sys.modules:
-    sys.modules["streamlit"] = SimpleNamespace(
-        cache_data=lambda *args, **kwargs: (lambda func: func),
-        session_state={},
-    )
 
-from badgegen.filter_builder import (
-    P_COMPANY,
-    P_FIRSTNAME,
-    P_HISTORIE,
-    P_JOBTITLE,
-    P_LASTNAME,
-    _as_list_values,
-    _build_context_filter_groups_for_group,
-    build_compiled_groups_from_model,
-)
+def _load_filter_builder_under_fake_streamlit():
+    module_name = "_tests_badgegen_filter_builder"
+    module_path = Path(__file__).resolve().parents[1] / "badgegen" / "filter_builder.py"
+    spec = spec_from_file_location(module_name, module_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("Konnte badgegen.filter_builder nicht laden.")
+
+    fake_streamlit = ModuleType("streamlit")
+    fake_streamlit.cache_data = lambda *args, **kwargs: (lambda func: func)
+    fake_streamlit.session_state = {}
+
+    previous_streamlit = sys.modules.get("streamlit")
+    previous_isolated = sys.modules.get(module_name)
+    try:
+        sys.modules["streamlit"] = fake_streamlit
+        isolated_module = module_from_spec(spec)
+        sys.modules[module_name] = isolated_module
+        spec.loader.exec_module(isolated_module)
+        return isolated_module
+    finally:
+        sys.modules.pop(module_name, None)
+        if previous_isolated is not None:
+            sys.modules[module_name] = previous_isolated
+        if previous_streamlit is None:
+            sys.modules.pop("streamlit", None)
+        else:
+            sys.modules["streamlit"] = previous_streamlit
+
+
+_filter_builder = _load_filter_builder_under_fake_streamlit()
+
+P_COMPANY = _filter_builder.P_COMPANY
+P_FIRSTNAME = _filter_builder.P_FIRSTNAME
+P_HISTORIE = _filter_builder.P_HISTORIE
+P_JOBTITLE = _filter_builder.P_JOBTITLE
+P_LASTNAME = _filter_builder.P_LASTNAME
+_as_list_values = _filter_builder._as_list_values
+_build_context_filter_groups_for_group = _filter_builder._build_context_filter_groups_for_group
+build_compiled_groups_from_model = _filter_builder.build_compiled_groups_from_model
 
 
 class AsListValuesTests(unittest.TestCase):
@@ -71,7 +97,7 @@ class BuildContextFilterGroupsForGroupTests(unittest.TestCase):
             {"id": "f2", "property": P_HISTORIE, "op": "EQ", "value": ["1", "2"]},
         ]
 
-        with patch("badgegen.filter_builder.SUGGEST_MAX_FILTERGROUPS", 3):
+        with patch.object(_filter_builder, "SUGGEST_MAX_FILTERGROUPS", 3):
             result = _build_context_filter_groups_for_group(group_filters, exclude_filter_id="missing")
 
         self.assertEqual([], result)

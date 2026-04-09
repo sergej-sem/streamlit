@@ -4,7 +4,11 @@ from collections.abc import MutableMapping
 from typing import Any
 
 from serienmailing.imap_sender import SerienMailResult
-from shared.mail_rich_text import default_mail_body_html, default_mail_body_text, editor_html_is_meaningful
+from shared.mail_preview import (
+    missing_preview_requirements as shared_missing_preview_requirements,
+    preview_ready as shared_preview_ready,
+)
+from shared.mail_rich_text import default_mail_body_html, default_mail_body_text
 
 MAIL_MODE_DRAFT = "Entw\u00fcrfe"
 MAIL_MODE_SEND = "Senden"
@@ -50,20 +54,15 @@ def missing_preview_requirements(
     subject: str,
     body_html: str,
 ) -> tuple[str, ...]:
-    missing: list[str] = []
-    if not str(sender_email or "").strip():
-        missing.append("Absenderadresse")
-    if not str(sender_password or "").strip():
-        missing.append("Passwort")
-
     has_contacts = getattr(contacts, "empty", True) is False if contacts is not None else False
-    if not has_contacts:
-        missing.append("mindestens ein Empfaenger")
-    if not str(subject or "").strip():
-        missing.append("Betreff")
-    if not editor_html_is_meaningful(body_html):
-        missing.append("Nachrichtenbody")
-    return tuple(missing)
+    return shared_missing_preview_requirements(
+        sender_email=sender_email,
+        sender_password=sender_password,
+        require_password=True,
+        has_recipients=has_contacts,
+        subject=subject,
+        body_html=body_html,
+    )
 
 
 def preview_ready(
@@ -74,10 +73,12 @@ def preview_ready(
     subject: str,
     body_html: str,
 ) -> bool:
-    return not missing_preview_requirements(
+    has_contacts = getattr(contacts, "empty", True) is False if contacts is not None else False
+    return shared_preview_ready(
         sender_email=sender_email,
         sender_password=sender_password,
-        contacts=contacts,
+        require_password=True,
+        has_recipients=has_contacts,
         subject=subject,
         body_html=body_html,
     )
@@ -91,7 +92,7 @@ def build_confirmation_phrase(mode: str, count: int) -> str:
 def summarize_mail_results(results: list[SerienMailResult], mode: str) -> tuple[str, str, str, bool]:
     success_status = "sent" if mode == MAIL_MODE_SEND else "draft_created"
     success_label = "Gesendet" if mode == MAIL_MODE_SEND else "Entwurf gespeichert"
-    summary_label = "E-Mail(s) gesendet" if mode == MAIL_MODE_SEND else "Entwurf/Entwuerfe gespeichert"
+    summary_label = "E-Mail(s) gesendet" if mode == MAIL_MODE_SEND else "Entwurf/Entwürfe gespeichert"
 
     ok = sum(1 for result in results if result.status == success_status)
     err = len(results) - ok
