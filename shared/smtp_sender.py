@@ -6,6 +6,7 @@ import re
 import socket
 import smtplib
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from email import utils as email_utils
 from email.message import EmailMessage
@@ -43,6 +44,18 @@ class SmtpSendResult:
     subject: str
     status: str
     details: str
+
+
+@dataclass(frozen=True)
+class SmtpSendProgress:
+    phase: str
+    current_index: int
+    total_messages: int
+    current_recipient: str
+    remaining_messages: int
+    completed_messages: int
+    estimated_remaining_seconds: float
+    current_delay_seconds: float | None = None
 
 
 def _friendly_smtp_error(raw: str) -> str:
@@ -178,11 +191,75 @@ def _next_send_delay_seconds(config: SmtpSendConfig) -> float | None:
     return random.uniform(min_value, max_value)
 
 
+def _average_delay_seconds(config: SmtpSendConfig) -> float:
+    delay_range = _resolve_delay_range(config)
+    if delay_range is None:
+        return 0.0
+    min_value, max_value = delay_range
+    return max((min_value + max_value) / 2.0, 0.0)
+
+
+def _average_send_seconds(total_send_seconds: float, completed_messages: int) -> float:
+    if completed_messages <= 0:
+        return 1.0
+    return max(total_send_seconds / completed_messages, 1.0)
+
+
+def _estimate_remaining_seconds_for_sending(
+    *,
+    total_messages: int,
+    current_index: int,
+    total_send_seconds: float,
+    completed_messages: int,
+    average_delay_seconds: float,
+) -> float:
+    remaining_after_current = max(total_messages - current_index, 0)
+    average_send_seconds = _average_send_seconds(total_send_seconds, completed_messages)
+    return (
+        average_send_seconds
+        + (remaining_after_current * average_send_seconds)
+        + (remaining_after_current * average_delay_seconds)
+    )
+
+
+def _estimate_remaining_seconds_for_waiting(
+    *,
+    total_messages: int,
+    current_index: int,
+    total_send_seconds: float,
+    completed_messages: int,
+    current_delay_seconds: float,
+    average_delay_seconds: float,
+) -> float:
+    remaining_after_current = max(total_messages - current_index, 0)
+    average_send_seconds = _average_send_seconds(total_send_seconds, completed_messages)
+    future_delays_after_sleep = max(remaining_after_current - 1, 0)
+    return (
+        max(current_delay_seconds, 0.0)
+        + (remaining_after_current * average_send_seconds)
+        + (future_delays_after_sleep * average_delay_seconds)
+    )
+
+
+def _emit_progress(
+    progress_callback: Callable[[SmtpSendProgress], None] | None,
+    progress: SmtpSendProgress,
+) -> None:
+    if progress_callback is None:
+        return
+    try:
+        progress_callback(progress)
+    except Exception:
+        # Progress reporting is best-effort and must not break the actual send run.
+        return
+
+
 def send_email_messages(
     messages: list[PreparedEmailMessage],
     config: SmtpSendConfig,
     *,
     sent_copy_config: ImapAppendConfig | None = None,
+    progress_callback: Callable[[SmtpSendProgress], None] | None = None,
 ) -> list[SmtpSendResult]:
     if not config.host.strip():
         raise ValueError("Der SMTP-Server darf nicht leer sein.")
@@ -201,10 +278,33 @@ def send_email_messages(
 
     results: list[SmtpSendResult] = []
     login_mailbox = _normalized_mailbox(config.username)
+    average_delay_seconds = _average_delay_seconds(config)
+    total_send_seconds = 0.0
 
     try:
         total_messages = len(messages)
         for index, item in enumerate(messages):
+            current_index = index + 1
+            _emit_progress(
+                progress_callback,
+                SmtpSendProgress(
+                    phase="sending",
+                    current_index=current_index,
+                    total_messages=total_messages,
+                    current_recipient=item.to_email,
+                    remaining_messages=max(total_messages - current_index, 0),
+                    completed_messages=index,
+                    estimated_remaining_seconds=_estimate_remaining_seconds_for_sending(
+                        total_messages=total_messages,
+                        current_index=current_index,
+                        total_send_seconds=total_send_seconds,
+                        completed_messages=index,
+                        average_delay_seconds=average_delay_seconds,
+                    ),
+                    current_delay_seconds=None,
+                ),
+            )
+            send_started_at = time.perf_counter()
             try:
                 header_from = _normalized_mailbox(item.message.get("From", ""))
                 if not header_from or header_from != login_mailbox:
@@ -247,10 +347,44 @@ def send_email_messages(
                         details=_friendly_smtp_error(str(exc)),
                     )
                 )
+            total_send_seconds += max(time.perf_counter() - send_started_at, 0.0)
             if index < total_messages - 1:
                 delay_seconds = _next_send_delay_seconds(config)
                 if delay_seconds is not None:
+                    _emit_progress(
+                        progress_callback,
+                        SmtpSendProgress(
+                            phase="waiting",
+                            current_index=current_index,
+                            total_messages=total_messages,
+                            current_recipient=item.to_email,
+                            remaining_messages=max(total_messages - current_index, 0),
+                            completed_messages=current_index,
+                            estimated_remaining_seconds=_estimate_remaining_seconds_for_waiting(
+                                total_messages=total_messages,
+                                current_index=current_index,
+                                total_send_seconds=total_send_seconds,
+                                completed_messages=current_index,
+                                current_delay_seconds=delay_seconds,
+                                average_delay_seconds=average_delay_seconds,
+                            ),
+                            current_delay_seconds=delay_seconds,
+                        ),
+                    )
                     time.sleep(delay_seconds)
+        _emit_progress(
+            progress_callback,
+            SmtpSendProgress(
+                phase="finished",
+                current_index=total_messages,
+                total_messages=total_messages,
+                current_recipient="",
+                remaining_messages=0,
+                completed_messages=total_messages,
+                estimated_remaining_seconds=0.0,
+                current_delay_seconds=None,
+            ),
+        )
     finally:
         try:
             connection.quit()

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 
 from serienmailing.contacts import (
     COLS,
@@ -38,6 +39,7 @@ from shared.mail_content_guard import (
     assess_html_mail_content,
     evaluate_send_guard,
 )
+from shared.mail_progress import create_streamlit_smtp_progress_reporter
 from shared.mail_rich_text import (
     editor_html_is_meaningful,
     plain_text_to_editor_html,
@@ -284,7 +286,7 @@ elif preview_ready(
         email=preview_row["email"],
     )
     st.caption(f"Betreff: {preview_subject}")
-    st.html(preview_body)
+    components.html(preview_body, height=420, scrolling=True)
     preview_assessment = assess_html_mail_content(preview_subject, preview_body)
     _show_guard_feedback(evaluate_send_guard(current_mail_mode, preview_assessment))
 
@@ -333,7 +335,7 @@ ready = (
 )
 
 button_label = "E-Mails senden" if is_send_mode else "Entwürfe erstellen"
-spinner_label = "E-Mails werden gesendet ..." if is_send_mode else "Entwürfe werden erstellt ..."
+spinner_label = "Entwürfe werden erstellt ..."
 
 if st.button(button_label, disabled=not ready, type="primary"):
     st.session_state["sm_mail_result"] = None
@@ -369,32 +371,34 @@ if st.button(button_label, disabled=not ready, type="primary"):
             mails = []
 
     if mails:
-        with st.spinner(spinner_label):
-            try:
-                if is_send_mode:
-                    results = send_serienmailing_messages(
-                        mails,
-                        SmtpSendConfig(
-                            host=smtp_host,
-                            port=smtp_port,
-                            username=sender_email.strip(),
-                            password=sender_password,
-                            use_ssl=smtp_use_ssl,
-                            use_starttls=smtp_use_starttls,
-                            timeout_seconds=smtp_timeout,
-                            delay_between_messages_seconds_min=DEFAULT_SEND_DELAY_MIN_SECONDS,
-                            delay_between_messages_seconds_max=DEFAULT_SEND_DELAY_MAX_SECONDS,
-                        ),
-                        sent_copy_config=ImapAppendConfig(
-                            host=imap_host,
-                            port=imap_port,
-                            username=sender_email.strip(),
-                            password=sender_password,
-                            mailbox=imap_sent_folder or "INBOX.Sent",
-                            use_ssl=imap_ssl,
-                        ),
-                    )
-                else:
+        try:
+            if is_send_mode:
+                progress_callback = create_streamlit_smtp_progress_reporter()
+                results = send_serienmailing_messages(
+                    mails,
+                    SmtpSendConfig(
+                        host=smtp_host,
+                        port=smtp_port,
+                        username=sender_email.strip(),
+                        password=sender_password,
+                        use_ssl=smtp_use_ssl,
+                        use_starttls=smtp_use_starttls,
+                        timeout_seconds=smtp_timeout,
+                        delay_between_messages_seconds_min=DEFAULT_SEND_DELAY_MIN_SECONDS,
+                        delay_between_messages_seconds_max=DEFAULT_SEND_DELAY_MAX_SECONDS,
+                    ),
+                    sent_copy_config=ImapAppendConfig(
+                        host=imap_host,
+                        port=imap_port,
+                        username=sender_email.strip(),
+                        password=sender_password,
+                        mailbox=imap_sent_folder or "INBOX.Sent",
+                        use_ssl=imap_ssl,
+                    ),
+                    progress_callback=progress_callback,
+                )
+            else:
+                with st.spinner(spinner_label):
                     results = create_serienmailing_drafts(
                         mails,
                         MailConfig(
@@ -406,9 +410,9 @@ if st.button(button_label, disabled=not ready, type="primary"):
                             use_ssl=imap_ssl,
                         ),
                     )
-                st.session_state["sm_mail_result"] = {"mode": mail_mode, "results": results}
-            except Exception as exc:
-                st.error(str(exc))
+            st.session_state["sm_mail_result"] = {"mode": mail_mode, "results": results}
+        except Exception as exc:
+            st.error(str(exc))
 
 mail_result = st.session_state.get("sm_mail_result")
 if mail_result:

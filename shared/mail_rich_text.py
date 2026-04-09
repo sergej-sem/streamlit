@@ -264,6 +264,24 @@ def sanitize_editor_html(value: str | None) -> str:
     return cleaned or "<p><br></p>"
 
 
+def _normalize_mail_block_spacing(value: str) -> str:
+    def _rewrite(match: re.Match[str]) -> str:
+        tag_name = match.group("tag")
+        attrs = match.group("attrs") or ""
+        style_match = re.search(r'\sstyle="([^"]*)"', attrs)
+        existing_style = style_match.group(1) if style_match else ""
+        merged_style = _merge_style_parts(existing_style, ["margin:0", "line-height:inherit"])
+        attrs_without_style = re.sub(r'\sstyle="[^"]*"', "", attrs)
+        return f'<{tag_name}{attrs_without_style} style="{merged_style}">'
+
+    return re.sub(
+        r"<(?P<tag>p|div)(?P<attrs>[^>]*)>",
+        _rewrite,
+        value,
+        flags=re.IGNORECASE,
+    )
+
+
 def render_personalized_rich_text_html(
     template_html: str | None,
     *,
@@ -280,7 +298,7 @@ def render_personalized_rich_text_html(
             "email": email,
         },
     )
-    cleaned = sanitize_editor_html(personalized)
+    cleaned = _normalize_mail_block_spacing(sanitize_editor_html(personalized))
     return (
         '<div style="font-family:Calibri,Arial,sans-serif;font-size:11pt;line-height:1.5;">'
         f"{cleaned}"

@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from serienmailing.imap_sender import SerienMail, SerienMailResult
 from shared.imap_append import ImapAppendConfig
 from shared.mail_message import build_email_message
 from shared.smtp_sender import (
     PreparedEmailMessage,
     SmtpSendConfig,
+    SmtpSendProgress,
     send_email_messages,
 )
 
@@ -15,6 +18,7 @@ def send_serienmailing_messages(
     config: SmtpSendConfig,
     *,
     sent_copy_config: ImapAppendConfig | None = None,
+    progress_callback: Callable[[SmtpSendProgress], None] | None = None,
 ) -> list[SerienMailResult]:
     prepared_messages = [
         PreparedEmailMessage(
@@ -36,6 +40,7 @@ def send_serienmailing_messages(
         prepared_messages,
         config,
         sent_copy_config=sent_copy_config,
+        progress_callback=progress_callback,
     )
     return [
         SerienMailResult(

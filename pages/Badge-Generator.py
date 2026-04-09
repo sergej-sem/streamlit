@@ -6,6 +6,7 @@ from typing import Dict, List
 
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 
 from badgegen.hubspot_search import (
     P_HISTORIE,
@@ -34,6 +35,7 @@ from shared.mail_content_guard import (
     assess_html_mail_content,
     evaluate_send_guard,
 )
+from shared.mail_progress import create_streamlit_smtp_progress_reporter
 from shared.mail_preview import missing_preview_requirements, preview_ready
 from shared.mail_rich_text import (
     default_mail_body_html,
@@ -499,9 +501,7 @@ else:
 
         bg_notify_button_label = "E-Mails senden" if bg_notify_is_send_mode else "E-Mail-Entwürfe erzeugen"
         bg_notify_spinner_label = (
-            f"Sende {n_badge_notifications} Benachrichtigungs-E-Mail(s) ..."
-            if bg_notify_is_send_mode
-            else f"Erstelle {n_badge_notifications} Benachrichtigungs-Entwurf/Entwürfe ..."
+            f"Erstelle {n_badge_notifications} Benachrichtigungs-Entwurf/Entwürfe ..."
         )
 
         if st.button(bg_notify_button_label, disabled=not bg_notify_ready, type="primary", key="bg_notify_btn"):
@@ -525,31 +525,32 @@ else:
                     if notify_feedback.blocked:
                         mails = []
                 if mails:
-                    with st.spinner(bg_notify_spinner_label):
-                        if bg_notify_is_send_mode:
-                            results = send_serienmailing_messages(
-                                mails,
-                                SmtpSendConfig(
-                                    host=bg_notify_smtp_host,
-                                    port=bg_notify_smtp_port,
-                                    username=bg_notify_sender,
-                                    password=bg_notify_pass,
-                                    use_ssl=bg_notify_smtp_ssl,
-                                    use_starttls=bg_notify_smtp_starttls,
-                                    timeout_seconds=bg_notify_smtp_timeout,
-                                    delay_between_messages_seconds_min=DEFAULT_SEND_DELAY_MIN_SECONDS,
-                                    delay_between_messages_seconds_max=DEFAULT_SEND_DELAY_MAX_SECONDS,
-                                ),
-                                sent_copy_config=ImapAppendConfig(
-                                    host=bg_notify_imap_host,
-                                    port=bg_notify_imap_port,
-                                    username=bg_notify_sender,
-                                    password=bg_notify_pass,
-                                    mailbox=bg_notify_imap_sent_folder or "INBOX.Sent",
-                                    use_ssl=bg_notify_imap_ssl,
-                                ),
-                            )
-                        else:
+                    if bg_notify_is_send_mode:
+                        results = send_serienmailing_messages(
+                            mails,
+                            SmtpSendConfig(
+                                host=bg_notify_smtp_host,
+                                port=bg_notify_smtp_port,
+                                username=bg_notify_sender,
+                                password=bg_notify_pass,
+                                use_ssl=bg_notify_smtp_ssl,
+                                use_starttls=bg_notify_smtp_starttls,
+                                timeout_seconds=bg_notify_smtp_timeout,
+                                delay_between_messages_seconds_min=DEFAULT_SEND_DELAY_MIN_SECONDS,
+                                delay_between_messages_seconds_max=DEFAULT_SEND_DELAY_MAX_SECONDS,
+                            ),
+                            sent_copy_config=ImapAppendConfig(
+                                host=bg_notify_imap_host,
+                                port=bg_notify_imap_port,
+                                username=bg_notify_sender,
+                                password=bg_notify_pass,
+                                mailbox=bg_notify_imap_sent_folder or "INBOX.Sent",
+                                use_ssl=bg_notify_imap_ssl,
+                            ),
+                            progress_callback=create_streamlit_smtp_progress_reporter(),
+                        )
+                    else:
+                        with st.spinner(bg_notify_spinner_label):
                             results = create_serienmailing_drafts(
                                 mails,
                                 MailConfig(
@@ -721,7 +722,7 @@ with st.expander("Badge-Mails speichern oder senden", expanded=False):
                 email=preview_row.get("email", ""),
             )
             st.caption(f"Betreff: {preview_subject}")
-            st.html(preview_body)
+            components.html(preview_body, height=420, scrolling=True)
             preview_assessment = assess_html_mail_content(preview_subject, preview_body)
             _bg_show_guard_feedback(evaluate_send_guard(bg_mail_mode, preview_assessment))
 
@@ -753,9 +754,7 @@ with st.expander("Badge-Mails speichern oder senden", expanded=False):
 
         bg_button_label = "E-Mails senden" if bg_is_send_mode else "Entwürfe erstellen"
         bg_spinner_label = (
-            f"Sende {n_with_email} E-Mail(s) ..."
-            if bg_is_send_mode
-            else f"Erstelle {n_with_email} Entwurf/Entwürfe ..."
+            f"Erstelle {n_with_email} Entwurf/Entwürfe ..."
         )
 
         if st.button(bg_button_label, disabled=not bg_ready, type="primary", key="bg_draft_btn"):
@@ -783,31 +782,32 @@ with st.expander("Badge-Mails speichern oder senden", expanded=False):
                     if badge_feedback.blocked:
                         mails = []
                 if mails:
-                    with st.spinner(bg_spinner_label):
-                        if bg_is_send_mode:
-                            results = send_serienmailing_messages(
-                                mails,
-                                SmtpSendConfig(
-                                    host=bg_smtp_host,
-                                    port=bg_smtp_port,
-                                    username=bg_sender.strip(),
-                                    password=bg_pass,
-                                    use_ssl=bg_smtp_ssl,
-                                    use_starttls=bg_smtp_starttls,
-                                    timeout_seconds=bg_smtp_timeout,
-                                    delay_between_messages_seconds_min=DEFAULT_SEND_DELAY_MIN_SECONDS,
-                                    delay_between_messages_seconds_max=DEFAULT_SEND_DELAY_MAX_SECONDS,
-                                ),
-                                sent_copy_config=ImapAppendConfig(
-                                    host=bg_imap_host,
-                                    port=bg_imap_port,
-                                    username=bg_sender.strip(),
-                                    password=bg_pass,
-                                    mailbox=bg_imap_sent_folder or "INBOX.Sent",
-                                    use_ssl=bg_imap_ssl,
-                                ),
-                            )
-                        else:
+                    if bg_is_send_mode:
+                        results = send_serienmailing_messages(
+                            mails,
+                            SmtpSendConfig(
+                                host=bg_smtp_host,
+                                port=bg_smtp_port,
+                                username=bg_sender.strip(),
+                                password=bg_pass,
+                                use_ssl=bg_smtp_ssl,
+                                use_starttls=bg_smtp_starttls,
+                                timeout_seconds=bg_smtp_timeout,
+                                delay_between_messages_seconds_min=DEFAULT_SEND_DELAY_MIN_SECONDS,
+                                delay_between_messages_seconds_max=DEFAULT_SEND_DELAY_MAX_SECONDS,
+                            ),
+                            sent_copy_config=ImapAppendConfig(
+                                host=bg_imap_host,
+                                port=bg_imap_port,
+                                username=bg_sender.strip(),
+                                password=bg_pass,
+                                mailbox=bg_imap_sent_folder or "INBOX.Sent",
+                                use_ssl=bg_imap_ssl,
+                            ),
+                            progress_callback=create_streamlit_smtp_progress_reporter(),
+                        )
+                    else:
+                        with st.spinner(bg_spinner_label):
                             results = create_serienmailing_drafts(
                                 mails,
                                 MailConfig(

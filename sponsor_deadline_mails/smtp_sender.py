@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import pandas as pd
@@ -10,6 +11,7 @@ from shared.mail_message import build_email_message
 from shared.smtp_sender import (
     PreparedEmailMessage,
     SmtpSendConfig,
+    SmtpSendProgress,
     send_email_messages,
 )
 
@@ -30,6 +32,7 @@ def create_smtp_sends(
     config: SmtpSendConfig,
     *,
     sent_copy_config: ImapAppendConfig | None = None,
+    progress_callback: Callable[[SmtpSendProgress], None] | None = None,
 ) -> list[SmtpSendRecord]:
     prepared_messages = [
         PreparedEmailMessage(
@@ -50,6 +53,7 @@ def create_smtp_sends(
         prepared_messages,
         config,
         sent_copy_config=sent_copy_config,
+        progress_callback=progress_callback,
     )
     return [
         SmtpSendRecord(

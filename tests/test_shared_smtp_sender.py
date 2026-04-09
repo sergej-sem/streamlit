@@ -9,6 +9,7 @@ from shared.mail_message import build_email_message
 from shared.smtp_sender import (
     PreparedEmailMessage,
     SmtpSendConfig,
+    SmtpSendProgress,
     _friendly_smtp_error,
     _next_send_delay_seconds,
     _resolve_delay_range,
@@ -518,6 +519,36 @@ class SendEmailMessagesTests(unittest.TestCase):
         mock_uniform.assert_called_once_with(3.0, 6.0)
         mock_sleep.assert_called_once_with(4.25)
 
+    @patch("shared.smtp_sender.random.uniform", return_value=4.25)
+    @patch("shared.smtp_sender.time.sleep")
+    @patch("shared.smtp_sender.smtplib.SMTP_SSL")
+    def test_progress_callback_reports_sending_waiting_and_finished(self, mock_smtp_ssl, mock_sleep, mock_uniform):
+        connection = MagicMock()
+        connection.send_message.return_value = {}
+        mock_smtp_ssl.return_value = connection
+        progress_events: list[SmtpSendProgress] = []
+
+        send_email_messages(
+            [
+                _make_prepared(to_email="first@example.com", subject="First"),
+                _make_prepared(to_email="second@example.com", subject="Second"),
+            ],
+            _make_config(
+                delay_between_messages_seconds_min=3.0,
+                delay_between_messages_seconds_max=6.0,
+            ),
+            progress_callback=progress_events.append,
+        )
+
+        self.assertEqual(["sending", "waiting", "sending", "finished"], [event.phase for event in progress_events])
+        self.assertEqual("first@example.com", progress_events[0].current_recipient)
+        self.assertEqual(1, progress_events[0].remaining_messages)
+        self.assertGreater(progress_events[0].estimated_remaining_seconds, 0)
+        self.assertEqual(4.25, progress_events[1].current_delay_seconds)
+        self.assertEqual("second@example.com", progress_events[2].current_recipient)
+        self.assertEqual(0, progress_events[2].remaining_messages)
+        self.assertEqual(0.0, progress_events[3].estimated_remaining_seconds)
+
     @patch("shared.smtp_sender.time.sleep")
     @patch("shared.smtp_sender.smtplib.SMTP_SSL")
     def test_single_message_does_not_sleep(self, mock_smtp_ssl, mock_sleep):
@@ -528,6 +559,21 @@ class SendEmailMessagesTests(unittest.TestCase):
         send_email_messages([_make_prepared()], _make_config(delay_between_messages_seconds=0.5))
 
         mock_sleep.assert_not_called()
+
+    @patch("shared.smtp_sender.smtplib.SMTP_SSL")
+    def test_single_message_progress_skips_waiting_phase(self, mock_smtp_ssl):
+        connection = MagicMock()
+        connection.send_message.return_value = {}
+        mock_smtp_ssl.return_value = connection
+        progress_events: list[SmtpSendProgress] = []
+
+        send_email_messages(
+            [_make_prepared()],
+            _make_config(delay_between_messages_seconds=0.5),
+            progress_callback=progress_events.append,
+        )
+
+        self.assertEqual(["sending", "finished"], [event.phase for event in progress_events])
 
     def test_invalid_ssl_starttls_combo_raises_value_error(self):
         with self.assertRaises(ValueError):

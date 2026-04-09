@@ -112,3 +112,16 @@ class SendSerienmailingMessagesTests(unittest.TestCase):
         )
 
         self.assertEqual(sent_copy_config, mock_send.call_args.kwargs["sent_copy_config"])
+
+    @patch("serienmailing.smtp_sender.send_email_messages")
+    def test_passes_progress_callback_through(self, mock_send):
+        mock_send.return_value = []
+        progress_callback = lambda progress: None
+
+        send_serienmailing_messages(
+            [_make_mail()],
+            _make_config(),
+            progress_callback=progress_callback,
+        )
+
+        self.assertIs(progress_callback, mock_send.call_args.kwargs["progress_callback"])

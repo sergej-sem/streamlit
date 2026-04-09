@@ -77,6 +77,16 @@ class MailRichTextSanitizationTests(unittest.TestCase):
         self.assertEqual(1, rendered.count("Severin Wagner"))
 
 
+    def test_render_final_mail_html_normalizes_paragraph_spacing(self):
+        rendered = render_final_mail_html(
+            "<p>Hallo</p><p><br></p><div>Welt</div>",
+            vorname="Joerg",
+        )
+        self.assertIn('<p style="margin:0; line-height:inherit">Hallo</p>', rendered)
+        self.assertIn('<p style="margin:0; line-height:inherit"><br></p>', rendered)
+        self.assertIn('<div style="margin:0; line-height:inherit">Welt</div>', rendered)
+
+
 class StreamlitQuillImportTests(unittest.TestCase):
     def test_streamlit_quill_can_be_imported(self):
         from streamlit_quill import st_quill

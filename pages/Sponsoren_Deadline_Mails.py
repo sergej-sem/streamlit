@@ -19,6 +19,7 @@ from shared.mail_content_guard import (
     assess_html_mail_content,
     evaluate_send_guard,
 )
+from shared.mail_progress import create_streamlit_smtp_progress_reporter
 from shared.mail_signatures import signature_html_for_sender
 from shared.smtp_sender import (
     DEFAULT_SEND_DELAY_MAX_SECONDS,
@@ -445,6 +446,7 @@ else:
                             mailbox=base_sent_folder or "INBOX.Sent",
                             use_ssl=base_imap_config.use_ssl,
                         ),
+                        progress_callback=create_streamlit_smtp_progress_reporter(),
                     )
                 else:
                     records = create_imap_drafts(
