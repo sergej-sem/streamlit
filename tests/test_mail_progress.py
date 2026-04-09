@@ -30,10 +30,12 @@ class MailProgressFormattingTests(unittest.TestCase):
         )
         message = describe_smtp_progress(progress)
         self.assertIn("alice@example.com", message)
+        self.assertIn("wird verarbeitet", message)
         self.assertIn("Noch 2 Mails", message)
+        self.assertIn("Insgesamt voraussichtlich", message)
         self.assertIn("10 Sekunden", message)
 
-    def test_waiting_message_contains_delay_and_overall_eta(self):
+    def test_waiting_message_uses_same_stable_text(self):
         progress = SmtpSendProgress(
             phase="waiting",
             current_index=1,
@@ -45,9 +47,9 @@ class MailProgressFormattingTests(unittest.TestCase):
             current_delay_seconds=3.1,
         )
         message = describe_smtp_progress(progress)
-        self.assertIn("wurde verarbeitet", message)
+        self.assertIn("wird verarbeitet", message)
         self.assertIn("Noch 1 Mail", message)
-        self.assertIn("4 Sekunden", message)
+        self.assertIn("Insgesamt voraussichtlich", message)
         self.assertIn("6 Sekunden", message)
 
     def test_finished_message_is_simple(self):

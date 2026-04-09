@@ -35,19 +35,10 @@ def describe_smtp_progress(progress: SmtpSendProgress) -> str:
     remaining_label = _mail_label(remaining)
     eta_seconds = format_estimated_seconds(progress.estimated_remaining_seconds)
 
-    if progress.phase == "waiting":
-        delay_seconds = format_estimated_seconds(progress.current_delay_seconds)
-        return (
-            f"E-Mail an {recipient} wurde verarbeitet. "
-            f"Noch {remaining} {remaining_label}. "
-            f"Nächster Versand in ca. {delay_seconds} Sekunden. "
-            f"Insgesamt voraussichtlich {eta_seconds} Sekunden."
-        )
-
     return (
-        f"E-Mail an {recipient} wird gesendet. "
+        f"E-Mail an {recipient} wird verarbeitet. "
         f"Noch {remaining} {remaining_label}. "
-        f"Voraussichtlich {eta_seconds} Sekunden."
+        f"Insgesamt voraussichtlich {eta_seconds} Sekunden."
     )
 
 
