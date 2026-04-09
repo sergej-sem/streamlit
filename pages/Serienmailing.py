@@ -44,7 +44,11 @@ from shared.mail_rich_text import (
     render_final_mail_html,
     render_mail_rich_text_editor,
 )
-from shared.smtp_sender import SmtpSendConfig
+from shared.smtp_sender import (
+    DEFAULT_SEND_DELAY_MAX_SECONDS,
+    DEFAULT_SEND_DELAY_MIN_SECONDS,
+    SmtpSendConfig,
+)
 from streamlit_ui import render_email_selectbox
 
 st.set_page_config(page_title="Serienmailing", layout="wide")
@@ -378,6 +382,8 @@ if st.button(button_label, disabled=not ready, type="primary"):
                             use_ssl=smtp_use_ssl,
                             use_starttls=smtp_use_starttls,
                             timeout_seconds=smtp_timeout,
+                            delay_between_messages_seconds_min=DEFAULT_SEND_DELAY_MIN_SECONDS,
+                            delay_between_messages_seconds_max=DEFAULT_SEND_DELAY_MAX_SECONDS,
                         ),
                         sent_copy_config=ImapAppendConfig(
                             host=imap_host,

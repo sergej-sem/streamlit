@@ -27,6 +27,8 @@ def _make_config(**overrides) -> SmtpSendConfig:
         use_starttls=False,
         timeout_seconds=30,
         delay_between_messages_seconds=0.75,
+        delay_between_messages_seconds_min=None,
+        delay_between_messages_seconds_max=None,
     )
     defaults.update(overrides)
     return SmtpSendConfig(**defaults)
@@ -86,8 +88,8 @@ class SmtpLocalHostnameTests(unittest.TestCase):
 
 
 class DelayResolutionTests(unittest.TestCase):
-    def test_default_delay_uses_randomized_range(self):
-        self.assertEqual((3.0, 6.0), _resolve_delay_range(_make_config()))
+    def test_default_delay_uses_legacy_single_delay_value(self):
+        self.assertEqual((0.75, 0.75), _resolve_delay_range(_make_config()))
 
     def test_legacy_single_delay_value_remains_supported(self):
         self.assertEqual(

@@ -42,7 +42,11 @@ from shared.mail_rich_text import (
     render_final_mail_html,
     render_mail_rich_text_editor,
 )
-from shared.smtp_sender import SmtpSendConfig
+from shared.smtp_sender import (
+    DEFAULT_SEND_DELAY_MAX_SECONDS,
+    DEFAULT_SEND_DELAY_MIN_SECONDS,
+    SmtpSendConfig,
+)
 from badgegen.notification_settings import (
     BadgeNotificationSettings,
     DEFAULT_BADGE_NOTIFICATION_RECIPIENT,
@@ -533,6 +537,8 @@ else:
                                     use_ssl=bg_notify_smtp_ssl,
                                     use_starttls=bg_notify_smtp_starttls,
                                     timeout_seconds=bg_notify_smtp_timeout,
+                                    delay_between_messages_seconds_min=DEFAULT_SEND_DELAY_MIN_SECONDS,
+                                    delay_between_messages_seconds_max=DEFAULT_SEND_DELAY_MAX_SECONDS,
                                 ),
                                 sent_copy_config=ImapAppendConfig(
                                     host=bg_notify_imap_host,
@@ -789,6 +795,8 @@ with st.expander("Badge-Mails speichern oder senden", expanded=False):
                                     use_ssl=bg_smtp_ssl,
                                     use_starttls=bg_smtp_starttls,
                                     timeout_seconds=bg_smtp_timeout,
+                                    delay_between_messages_seconds_min=DEFAULT_SEND_DELAY_MIN_SECONDS,
+                                    delay_between_messages_seconds_max=DEFAULT_SEND_DELAY_MAX_SECONDS,
                                 ),
                                 sent_copy_config=ImapAppendConfig(
                                     host=bg_imap_host,

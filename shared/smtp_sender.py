@@ -12,6 +12,9 @@ from email.message import EmailMessage
 
 from shared.imap_append import ImapAppendConfig, append_message_to_mailbox
 
+DEFAULT_SEND_DELAY_MIN_SECONDS = 3.0
+DEFAULT_SEND_DELAY_MAX_SECONDS = 6.0
+
 
 @dataclass(frozen=True)
 class SmtpSendConfig:
@@ -23,8 +26,8 @@ class SmtpSendConfig:
     use_starttls: bool = False
     timeout_seconds: int = 30
     delay_between_messages_seconds: float = 0.75
-    delay_between_messages_seconds_min: float | None = 3.0
-    delay_between_messages_seconds_max: float | None = 6.0
+    delay_between_messages_seconds_min: float | None = None
+    delay_between_messages_seconds_max: float | None = None
 
 
 @dataclass(frozen=True)
@@ -206,7 +209,7 @@ def send_email_messages(
                 header_from = _normalized_mailbox(item.message.get("From", ""))
                 if not header_from or header_from != login_mailbox:
                     raise RuntimeError(
-                        "Der sichtbare Absender muss mit der SMTP-Anmeldung uebereinstimmen."
+                        "Der sichtbare Absender muss mit der SMTP-Anmeldung übereinstimmen."
                     )
 
                 recipients = _envelope_recipients(item.message)

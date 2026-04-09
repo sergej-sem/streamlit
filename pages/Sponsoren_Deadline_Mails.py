@@ -20,7 +20,11 @@ from shared.mail_content_guard import (
     evaluate_send_guard,
 )
 from shared.mail_signatures import signature_html_for_sender
-from shared.smtp_sender import SmtpSendConfig
+from shared.smtp_sender import (
+    DEFAULT_SEND_DELAY_MAX_SECONDS,
+    DEFAULT_SEND_DELAY_MIN_SECONDS,
+    SmtpSendConfig,
+)
 from sponsor_deadline_mails import (
     DEFAULT_EVENT_CITY,
     DEFAULT_EVENT_END,
@@ -133,6 +137,8 @@ def _load_base_smtp_config() -> SmtpSendConfig | None:
         use_ssl=settings.use_ssl,
         use_starttls=settings.use_starttls,
         timeout_seconds=settings.timeout_seconds,
+        delay_between_messages_seconds_min=DEFAULT_SEND_DELAY_MIN_SECONDS,
+        delay_between_messages_seconds_max=DEFAULT_SEND_DELAY_MAX_SECONDS,
     )
 
 
@@ -428,6 +434,8 @@ else:
                             use_ssl=base_smtp_config.use_ssl,
                             use_starttls=base_smtp_config.use_starttls,
                             timeout_seconds=base_smtp_config.timeout_seconds,
+                            delay_between_messages_seconds_min=base_smtp_config.delay_between_messages_seconds_min,
+                            delay_between_messages_seconds_max=base_smtp_config.delay_between_messages_seconds_max,
                         ),
                         sent_copy_config=ImapAppendConfig(
                             host=base_imap_config.host,
@@ -490,7 +498,7 @@ if mail_log_records or mail_run_error:
         error_count = total_count
 
     st.write(
-        f"Ergebnisuebersicht: Gesamt: **{total_count}** · "
+        f"Ergebnisübersicht: Gesamt: **{total_count}** · "
         f"Erfolgreich: **{success_count}** · "
         f"Fehler: **{error_count}**"
     )
