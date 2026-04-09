@@ -13,8 +13,6 @@ from serienmailing.contacts import (
 from serienmailing.imap_sender import MailConfig, SerienMail, create_serienmailing_drafts
 from serienmailing.mail_builder import (
     SENDER_EMAIL_SUGGESTIONS,
-    SIGNATURE_SEVERIN_HTML,
-    build_html_body,
     build_subject,
 )
 from serienmailing.smtp_sender import send_serienmailing_messages
@@ -22,7 +20,10 @@ from serienmailing.ui_helpers import (
     MAIL_MODE_SEND,
     apply_contacts_state,
     build_confirmation_phrase,
-    default_mail_text,
+    default_mail_body_html_value,
+    default_subject_template,
+    missing_preview_requirements,
+    preview_ready,
     reset_confirmation_state,
     summarize_mail_results,
 )
@@ -32,12 +33,22 @@ from shared.config import (
     load_smtp_send_settings,
 )
 from shared.imap_append import ImapAppendConfig
+from shared.mail_content_guard import (
+    assess_html_mail_batch,
+    assess_html_mail_content,
+    evaluate_send_guard,
+)
+from shared.mail_rich_text import (
+    editor_html_is_meaningful,
+    plain_text_to_editor_html,
+    render_mail_rich_text_editor,
+    render_personalized_rich_text_html,
+)
 from shared.smtp_sender import SmtpSendConfig
 from streamlit_ui import render_email_selectbox
 
 st.set_page_config(page_title="Serienmailing", layout="wide")
 
-_SEVERIN_ADDR = "severin.wagner@mysecurityevent.de"
 _MAIL_MODE_OPTIONS = ("Entw\u00fcrfe", "Senden")
 
 
@@ -45,7 +56,14 @@ def _init_state() -> None:
     st.session_state.setdefault("sm_contacts", None)
     st.session_state.setdefault("sm_mail_mode", _MAIL_MODE_OPTIONS[0])
     st.session_state.setdefault("sm_mail_result", None)
-    st.session_state.setdefault("sm_mail_text", default_mail_text())
+    st.session_state.setdefault("sm_subject_tpl", default_subject_template())
+    if "sm_mail_body_html" not in st.session_state:
+        legacy_mail_text = st.session_state.get("sm_mail_text")
+        st.session_state["sm_mail_body_html"] = (
+            plain_text_to_editor_html(legacy_mail_text)
+            if legacy_mail_text is not None
+            else default_mail_body_html_value()
+        )
     st.session_state.setdefault("sm_confirm_input", "")
     st.session_state.setdefault("sm_confirm_expected", "")
 
@@ -78,6 +96,22 @@ def _load_smtp_defaults() -> tuple[str, int, bool, bool, int]:
         )
     except ConfigError:
         return "", 465, True, False, 30
+
+
+def _show_guard_feedback(feedback) -> None:
+    if not getattr(feedback, "message", "").strip():
+        return
+    text = feedback.message
+    if feedback.reasons:
+        text += " Gruende: " + "; ".join(feedback.reasons[:3])
+    if feedback.level == "error":
+        st.error(text)
+    elif feedback.level == "warning":
+        st.warning(text)
+    elif feedback.level == "info":
+        st.info(text)
+    else:
+        st.caption(text)
 
 
 @st.cache_data(show_spinner="HubSpot-Listen laden ...")
@@ -195,22 +229,36 @@ st.subheader("E-Mail")
 
 subject_tpl = st.text_input(
     "Betreff",
+    key="sm_subject_tpl",
     placeholder="z. B. Einladung - {firma}",
     help="Platzhalter: {vorname}, {firma}, {email}",
 )
-mail_text = st.text_area(
-    "Text",
-    height=200,
-    placeholder="Ihr Text hier ...\n\nZeilenumbrueche werden korrekt uebernommen.",
-    help="Platzhalter: {vorname}, {firma}, {email}",
-    key="sm_mail_text",
+mail_body_html = render_mail_rich_text_editor(
+    label="Text",
+    key="sm_mail_body_html",
+    value=st.session_state.get("sm_mail_body_html", default_mail_body_html_value()),
+    placeholder="Ihr Text hier ... Platzhalter: {vorname}, {firma}, {email}",
 )
 
 attachment_file = st.file_uploader("Anhang (optional)", key="sm_attachment")
 
-signature_html = SIGNATURE_SEVERIN_HTML if sender_email.strip().lower() == _SEVERIN_ADDR else ""
-
-if contacts_df is not None and not contacts_df.empty and subject_tpl and mail_text:
+current_mail_mode = st.session_state.get("sm_mail_mode", _MAIL_MODE_OPTIONS[0])
+preview_missing = missing_preview_requirements(
+    sender_email=sender_email,
+    sender_password=sender_password,
+    contacts=contacts_df,
+    subject=subject_tpl,
+    body_html=mail_body_html,
+)
+if preview_missing:
+    st.info("Vorschau noch nicht verfuegbar. Es fehlen: " + ", ".join(preview_missing) + ".")
+elif preview_ready(
+    sender_email=sender_email,
+    sender_password=sender_password,
+    contacts=contacts_df,
+    subject=subject_tpl,
+    body_html=mail_body_html,
+):
     st.markdown("**Vorschau**")
     preview_labels = [
         f"{row['vorname']} - {row['email']}" if row["vorname"] else row["email"]
@@ -224,16 +272,16 @@ if contacts_df is not None and not contacts_df.empty and subject_tpl and mail_te
     )
     preview_row = contacts_df.iloc[preview_idx]
     preview_subject = build_subject(subject_tpl, preview_row["vorname"], preview_row["firma"], preview_row["email"])
-    preview_body = build_html_body(
-        preview_row["vorname"],
-        mail_text,
-        signature_html,
-        preview_row["firma"],
-        preview_row["email"],
-        closing_text="",
+    preview_body = render_personalized_rich_text_html(
+        mail_body_html,
+        vorname=preview_row["vorname"],
+        firma=preview_row["firma"],
+        email=preview_row["email"],
     )
     st.caption(f"Betreff: {preview_subject}")
     st.html(preview_body)
+    preview_assessment = assess_html_mail_content(preview_subject, preview_body)
+    _show_guard_feedback(evaluate_send_guard(current_mail_mode, preview_assessment))
 
 st.divider()
 
@@ -274,7 +322,7 @@ ready = (
     and bool(sender_email.strip())
     and bool(sender_password)
     and bool(subject_tpl.strip())
-    and bool(mail_text.strip())
+    and editor_html_is_meaningful(mail_body_html)
     and bool(smtp_host if is_send_mode else imap_host)
     and bool(imap_host if is_send_mode else True)
 )
@@ -283,6 +331,7 @@ button_label = "E-Mails senden" if is_send_mode else "Entwuerfe erstellen"
 spinner_label = "E-Mails werden gesendet ..." if is_send_mode else "Entwuerfe werden erstellt ..."
 
 if st.button(button_label, disabled=not ready, type="primary"):
+    st.session_state["sm_mail_result"] = None
     attachment_bytes = attachment_file.read() if attachment_file else None
     attachment_name = attachment_file.name if attachment_file else None
     mails = [
@@ -291,13 +340,11 @@ if st.button(button_label, disabled=not ready, type="primary"):
             vorname=row["vorname"],
             firma=row["firma"],
             subject=build_subject(subject_tpl, row["vorname"], row["firma"], row["email"]),
-            html_body=build_html_body(
-                row["vorname"],
-                mail_text,
-                signature_html,
-                row["firma"],
-                row["email"],
-                closing_text="",
+            html_body=render_personalized_rich_text_html(
+                mail_body_html,
+                vorname=row["vorname"],
+                firma=row["firma"],
+                email=row["email"],
             ),
             attachment_bytes=attachment_bytes,
             attachment_filename=attachment_name,
@@ -305,44 +352,55 @@ if st.button(button_label, disabled=not ready, type="primary"):
         for _, row in contacts_df.iterrows()
     ]
 
-    with st.spinner(spinner_label):
-        try:
-            if is_send_mode:
-                results = send_serienmailing_messages(
-                    mails,
-                    SmtpSendConfig(
-                        host=smtp_host,
-                        port=smtp_port,
-                        username=sender_email.strip(),
-                        password=sender_password,
-                        use_ssl=smtp_use_ssl,
-                        use_starttls=smtp_use_starttls,
-                        timeout_seconds=smtp_timeout,
-                    ),
-                    sent_copy_config=ImapAppendConfig(
-                        host=imap_host,
-                        port=imap_port,
-                        username=sender_email.strip(),
-                        password=sender_password,
-                        mailbox=imap_sent_folder or "INBOX.Sent",
-                        use_ssl=imap_ssl,
-                    ),
-                )
-            else:
-                results = create_serienmailing_drafts(
-                    mails,
-                    MailConfig(
-                        host=imap_host,
-                        port=imap_port,
-                        username=sender_email.strip(),
-                        password=sender_password,
-                        drafts_folder=imap_folder or "Drafts",
-                        use_ssl=imap_ssl,
-                    ),
-                )
-            st.session_state["sm_mail_result"] = {"mode": mail_mode, "results": results}
-        except Exception as exc:
-            st.error(str(exc))
+    if is_send_mode:
+        batch_assessment = assess_html_mail_batch(
+            (mail.subject, mail.html_body)
+            for mail in mails
+        )
+        guard_feedback = evaluate_send_guard(mail_mode, batch_assessment)
+        _show_guard_feedback(guard_feedback)
+        if guard_feedback.blocked:
+            mails = []
+
+    if mails:
+        with st.spinner(spinner_label):
+            try:
+                if is_send_mode:
+                    results = send_serienmailing_messages(
+                        mails,
+                        SmtpSendConfig(
+                            host=smtp_host,
+                            port=smtp_port,
+                            username=sender_email.strip(),
+                            password=sender_password,
+                            use_ssl=smtp_use_ssl,
+                            use_starttls=smtp_use_starttls,
+                            timeout_seconds=smtp_timeout,
+                        ),
+                        sent_copy_config=ImapAppendConfig(
+                            host=imap_host,
+                            port=imap_port,
+                            username=sender_email.strip(),
+                            password=sender_password,
+                            mailbox=imap_sent_folder or "INBOX.Sent",
+                            use_ssl=imap_ssl,
+                        ),
+                    )
+                else:
+                    results = create_serienmailing_drafts(
+                        mails,
+                        MailConfig(
+                            host=imap_host,
+                            port=imap_port,
+                            username=sender_email.strip(),
+                            password=sender_password,
+                            drafts_folder=imap_folder or "Drafts",
+                            use_ssl=imap_ssl,
+                        ),
+                    )
+                st.session_state["sm_mail_result"] = {"mode": mail_mode, "results": results}
+            except Exception as exc:
+                st.error(str(exc))
 
 mail_result = st.session_state.get("sm_mail_result")
 if mail_result:

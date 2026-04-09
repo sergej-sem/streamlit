@@ -126,6 +126,19 @@ class BuildBadgeMailsTests(unittest.TestCase):
         mails, _ = build_badge_mails(df, "{vorname} von {firma}", "Body", "", self._tpl_map)
         self.assertEqual(mails[0].subject, "Eva von Corp")
 
+    def test_rich_text_body_template_is_rendered_without_hidden_signature(self):
+        df = self._df([_row(firstname="Eva", company="Corp")])
+        mails, _ = build_badge_mails(
+            df,
+            "Betreff",
+            "",
+            "",
+            self._tpl_map,
+            body_html_template="<p><strong>Hallo {vorname}</strong></p><p><br></p><p>Beste Grüße,</p>",
+        )
+        self.assertIn("<strong>Hallo Eva</strong>", mails[0].html_body)
+        self.assertNotIn("Severin Wagner", mails[0].html_body)
+
     # ── mixed input ─────────────────────────────────────────────────────────
 
     def test_returns_correct_counts_mixed(self):

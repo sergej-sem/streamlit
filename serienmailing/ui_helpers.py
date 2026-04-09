@@ -4,6 +4,7 @@ from collections.abc import MutableMapping
 from typing import Any
 
 from serienmailing.imap_sender import SerienMailResult
+from shared.mail_rich_text import default_mail_body_html, default_mail_body_text, editor_html_is_meaningful
 
 MAIL_MODE_DRAFT = "Entw\u00fcrfe"
 MAIL_MODE_SEND = "Senden"
@@ -12,8 +13,16 @@ _CONFIRM_WORD_DRAFT = "ENTW\u00dcRFE"
 _CONFIRM_WORD_SEND = "SENDEN"
 
 
+def default_subject_template() -> str:
+    return ""
+
+
 def default_mail_text() -> str:
-    return "\n\nBeste Gr\u00fc\u00dfe,"
+    return default_mail_body_text()
+
+
+def default_mail_body_html_value() -> str:
+    return default_mail_body_html()
 
 
 def reset_confirmation_state(state: MutableMapping[str, Any]) -> None:
@@ -23,12 +32,55 @@ def reset_confirmation_state(state: MutableMapping[str, Any]) -> None:
 
 def apply_contacts_state(state: MutableMapping[str, Any], contacts: Any) -> None:
     current_mode = state.get("sm_mail_mode", MAIL_MODE_DRAFT)
-    current_text = state.get("sm_mail_text", default_mail_text())
+    current_subject = state.get("sm_subject_tpl", default_subject_template())
+    current_body_html = state.get("sm_mail_body_html", default_mail_body_html_value())
     state["sm_contacts"] = contacts
     state["sm_mail_mode"] = current_mode
-    state["sm_mail_text"] = current_text
+    state["sm_subject_tpl"] = current_subject
+    state["sm_mail_body_html"] = current_body_html
     state["sm_mail_result"] = None
     reset_confirmation_state(state)
+
+
+def missing_preview_requirements(
+    *,
+    sender_email: str,
+    sender_password: str,
+    contacts: Any,
+    subject: str,
+    body_html: str,
+) -> tuple[str, ...]:
+    missing: list[str] = []
+    if not str(sender_email or "").strip():
+        missing.append("Absenderadresse")
+    if not str(sender_password or "").strip():
+        missing.append("Passwort")
+
+    has_contacts = getattr(contacts, "empty", True) is False if contacts is not None else False
+    if not has_contacts:
+        missing.append("mindestens ein Empfaenger")
+    if not str(subject or "").strip():
+        missing.append("Betreff")
+    if not editor_html_is_meaningful(body_html):
+        missing.append("Nachrichtenbody")
+    return tuple(missing)
+
+
+def preview_ready(
+    *,
+    sender_email: str,
+    sender_password: str,
+    contacts: Any,
+    subject: str,
+    body_html: str,
+) -> bool:
+    return not missing_preview_requirements(
+        sender_email=sender_email,
+        sender_password=sender_password,
+        contacts=contacts,
+        subject=subject,
+        body_html=body_html,
+    )
 
 
 def build_confirmation_phrase(mode: str, count: int) -> str:

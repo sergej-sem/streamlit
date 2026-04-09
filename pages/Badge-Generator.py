@@ -1,4 +1,4 @@
-﻿# pages/03_Badge-Generator.py
+# pages/03_Badge-Generator.py
 
 import re
 from pathlib import Path
@@ -18,8 +18,6 @@ from badgegen.filter_builder import render_filter_builder
 from serienmailing.imap_sender import MailConfig, create_serienmailing_drafts
 from serienmailing.mail_builder import (
     SENDER_EMAIL_SUGGESTIONS,
-    SIGNATURE_SEVERIN_HTML,
-    build_html_body,
     build_subject,
 )
 from serienmailing.smtp_sender import send_serienmailing_messages
@@ -31,6 +29,18 @@ from shared.config import (
     load_smtp_send_settings,
 )
 from shared.imap_append import ImapAppendConfig
+from shared.mail_content_guard import (
+    assess_html_mail_batch,
+    assess_html_mail_content,
+    evaluate_send_guard,
+)
+from shared.mail_rich_text import (
+    default_mail_body_html,
+    editor_html_is_meaningful,
+    plain_text_to_editor_html,
+    render_mail_rich_text_editor,
+    render_personalized_rich_text_html,
+)
 from shared.smtp_sender import SmtpSendConfig
 from badgegen.notification_settings import (
     BadgeNotificationSettings,
@@ -61,8 +71,6 @@ DEFAULT_TEMPLATES = {
     "Team": str(BADGES_DIR / "team.png"),
 }
 
-
-_BG_SEVERIN_ADDR  = "severin.wagner@mysecurityevent.de"
 _BG_CONFIRM_WORD  = "ENTWÜRFE"
 _BG_DEFAULT_SUBJECT = "Dein Badge – {vorname}"
 _BG_DEFAULT_BODY    = "anbei finden Sie Ihren persönlichen Badge für die Veranstaltung."
@@ -94,6 +102,22 @@ def _bg_load_smtp_defaults() -> tuple[str, int, bool, bool, int]:
         )
     except ConfigError:
         return "", 465, True, False, 30
+
+
+def _bg_show_guard_feedback(feedback) -> None:
+    if not getattr(feedback, "message", "").strip():
+        return
+    text = feedback.message
+    if feedback.reasons:
+        text += " Gruende: " + "; ".join(feedback.reasons[:3])
+    if feedback.level == "error":
+        st.error(text)
+    elif feedback.level == "warning":
+        st.warning(text)
+    elif feedback.level == "info":
+        st.info(text)
+    else:
+        st.caption(text)
 
 
 def _bg_init_notification_settings() -> None:
@@ -476,17 +500,27 @@ else:
         )
 
         if st.button(bg_notify_button_label, disabled=not bg_notify_ready, type="primary", key="bg_notify_btn"):
-            with st.spinner(bg_notify_spinner_label):
-                try:
-                    mails, skipped = build_badge_notification_mails(
-                        df_out=df_out,
-                        recipient_email=bg_notify_recipient,
-                        tpl_map=tpl_map,
-                        uppercase_names=uppercase_names,
-                        uppercase_company=uppercase_company,
-                        colored_qr=colored_qr,
+            st.session_state["bg_notify_result"] = None
+            try:
+                mails, skipped = build_badge_notification_mails(
+                    df_out=df_out,
+                    recipient_email=bg_notify_recipient,
+                    tpl_map=tpl_map,
+                    uppercase_names=uppercase_names,
+                    uppercase_company=uppercase_company,
+                    colored_qr=colored_qr,
+                )
+                if bg_notify_is_send_mode and mails:
+                    notify_assessment = assess_html_mail_batch(
+                        (mail.subject, mail.html_body)
+                        for mail in mails
                     )
-                    if mails:
+                    notify_feedback = evaluate_send_guard(bg_notify_mode, notify_assessment)
+                    _bg_show_guard_feedback(notify_feedback)
+                    if notify_feedback.blocked:
+                        mails = []
+                if mails:
+                    with st.spinner(bg_notify_spinner_label):
                         if bg_notify_is_send_mode:
                             results = send_serienmailing_messages(
                                 mails,
@@ -520,15 +554,15 @@ else:
                                     use_ssl=bg_notify_imap_ssl,
                                 ),
                             )
-                    else:
-                        results = []
-                    st.session_state["bg_notify_result"] = {
-                        "mode": bg_notify_mode,
-                        "results": results,
-                        "skipped": skipped,
-                    }
-                except Exception as exc:
-                    st.error(str(exc))
+                else:
+                    results = []
+                st.session_state["bg_notify_result"] = {
+                    "mode": bg_notify_mode,
+                    "results": results,
+                    "skipped": skipped,
+                }
+            except Exception as exc:
+                st.error(str(exc))
 
     bg_notify_result = st.session_state.get("bg_notify_result")
     if bg_notify_result is not None:
@@ -616,22 +650,26 @@ with st.expander("Badge-Mails speichern oder senden", expanded=False):
 
         bg_subject = st.text_input(
             "Betreff",
-            value=_BG_DEFAULT_SUBJECT,
+            placeholder=_BG_DEFAULT_SUBJECT,
             help="Platzhalter: {vorname}, {firma}, {email}",
             key="bg_subject",
         )
-        bg_body = st.text_area(
-            "Text",
-            value=_BG_DEFAULT_BODY,
-            height=100,
-            help="Platzhalter: {vorname}, {firma}, {email}",
-            key="bg_body",
+        if "bg_body_html" not in st.session_state:
+            legacy_body = st.session_state.get("bg_body")
+            st.session_state["bg_body_html"] = (
+                plain_text_to_editor_html(legacy_body)
+                if legacy_body is not None
+                else default_mail_body_html()
+            )
+        bg_body_html = render_mail_rich_text_editor(
+            label="Text",
+            key="bg_body_html",
+            value=st.session_state.get("bg_body_html", default_mail_body_html()),
+            placeholder=_BG_DEFAULT_BODY,
         )
 
-        bg_sig = SIGNATURE_SEVERIN_HTML if bg_sender.strip().lower() == _BG_SEVERIN_ADDR else ""
-
         df_preview = df_out[df_out["email"].str.strip() != ""].reset_index(drop=True)
-        if not df_preview.empty and bg_subject.strip() and bg_body.strip():
+        if not df_preview.empty and bg_subject.strip() and editor_html_is_meaningful(bg_body_html):
             st.markdown("**Vorschau**")
             preview_labels = [
                 f"{row['firstname']} {row['lastname']} - {row['email']}".strip(" -")
@@ -653,15 +691,16 @@ with st.expander("Badge-Mails speichern oder senden", expanded=False):
                 preview_row.get("company", ""),
                 preview_row.get("email", ""),
             )
-            preview_body = build_html_body(
-                preview_row.get("firstname", ""),
-                bg_body,
-                bg_sig,
-                preview_row.get("company", ""),
-                preview_row.get("email", ""),
+            preview_body = render_personalized_rich_text_html(
+                bg_body_html,
+                vorname=preview_row.get("firstname", ""),
+                firma=preview_row.get("company", ""),
+                email=preview_row.get("email", ""),
             )
             st.caption(f"Betreff: {preview_subject}")
             st.html(preview_body)
+            preview_assessment = assess_html_mail_content(preview_subject, preview_body)
+            _bg_show_guard_feedback(evaluate_send_guard(bg_mail_mode, preview_assessment))
 
         bg_confirm_word = _BG_CONFIRM_WORD_SEND if bg_is_send_mode else _BG_CONFIRM_WORD_DRAFT
         bg_expected = f"{bg_confirm_word} {n_with_email}"
@@ -684,6 +723,7 @@ with st.expander("Badge-Mails speichern oder senden", expanded=False):
             and bool(bg_sender.strip())
             and bool(bg_pass)
             and bool(bg_subject.strip())
+            and editor_html_is_meaningful(bg_body_html)
             and bool(bg_smtp_host if bg_is_send_mode else bg_imap_host)
             and bool(bg_imap_host if bg_is_send_mode else True)
         )
@@ -696,19 +736,30 @@ with st.expander("Badge-Mails speichern oder senden", expanded=False):
         )
 
         if st.button(bg_button_label, disabled=not bg_ready, type="primary", key="bg_draft_btn"):
-            with st.spinner(bg_spinner_label):
-                try:
-                    mails, skipped = build_badge_mails(
-                        df_out=df_out,
-                        subject_tpl=bg_subject,
-                        body_text=bg_body,
-                        sig_html=bg_sig,
-                        tpl_map=tpl_map,
-                        uppercase_names=uppercase_names,
-                        uppercase_company=uppercase_company,
-                        colored_qr=colored_qr,
+            st.session_state["bg_draft_result"] = None
+            try:
+                mails, skipped = build_badge_mails(
+                    df_out=df_out,
+                    subject_tpl=bg_subject,
+                    body_text="",
+                    sig_html="",
+                    body_html_template=bg_body_html,
+                    tpl_map=tpl_map,
+                    uppercase_names=uppercase_names,
+                    uppercase_company=uppercase_company,
+                    colored_qr=colored_qr,
+                )
+                if bg_is_send_mode and mails:
+                    badge_assessment = assess_html_mail_batch(
+                        (mail.subject, mail.html_body)
+                        for mail in mails
                     )
-                    if mails:
+                    badge_feedback = evaluate_send_guard(bg_mail_mode, badge_assessment)
+                    _bg_show_guard_feedback(badge_feedback)
+                    if badge_feedback.blocked:
+                        mails = []
+                if mails:
+                    with st.spinner(bg_spinner_label):
                         if bg_is_send_mode:
                             results = send_serienmailing_messages(
                                 mails,
@@ -742,15 +793,15 @@ with st.expander("Badge-Mails speichern oder senden", expanded=False):
                                     use_ssl=bg_imap_ssl,
                                 ),
                             )
-                    else:
-                        results = []
-                    st.session_state["bg_draft_result"] = {
-                        "mode": bg_mail_mode,
-                        "results": results,
-                        "skipped": skipped,
-                    }
-                except Exception as exc:
-                    st.error(str(exc))
+                else:
+                    results = []
+                st.session_state["bg_draft_result"] = {
+                    "mode": bg_mail_mode,
+                    "results": results,
+                    "skipped": skipped,
+                }
+            except Exception as exc:
+                st.error(str(exc))
 
         bg_result = st.session_state.get("bg_draft_result")
         if bg_result is not None:

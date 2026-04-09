@@ -14,6 +14,11 @@ from shared.config import (
     load_smtp_send_settings,
 )
 from shared.imap_append import ImapAppendConfig
+from shared.mail_content_guard import (
+    assess_html_mail_batch,
+    assess_html_mail_content,
+    evaluate_send_guard,
+)
 from shared.smtp_sender import SmtpSendConfig
 from sponsor_deadline_mails import (
     DEFAULT_EVENT_CITY,
@@ -150,6 +155,22 @@ def _load_base_smtp_config() -> SmtpSendConfig | None:
 
 def _mail_label(mail_number: int, mail) -> str:
     return f"{mail_number} - {mail.sponsor_name} ({mail.to_email})"
+
+
+def _show_guard_feedback(feedback) -> None:
+    if not getattr(feedback, "message", "").strip():
+        return
+    text = feedback.message
+    if feedback.reasons:
+        text += " Gruende: " + "; ".join(feedback.reasons[:3])
+    if feedback.level == "error":
+        st.error(text)
+    elif feedback.level == "warning":
+        st.warning(text)
+    elif feedback.level == "info":
+        st.info(text)
+    else:
+        st.caption(text)
 
 
 @st.fragment
@@ -368,6 +389,9 @@ else:
     else:
         st.info("Die Entwuerfe werden in Deinem Postfach gespeichert.")
 
+    preview_assessment = assess_html_mail_content(preview_mail.subject, preview_mail.html_body)
+    _show_guard_feedback(evaluate_send_guard(mail_mode, preview_assessment))
+
     confirm_text = st.text_input(
         f"Bestaetigung: Bitte exakt {expected_confirmation} eintippen",
         value="",
@@ -384,73 +408,85 @@ else:
         use_container_width=True,
         disabled=not allow_run,
     ):
-        run_started_utc = datetime.now(timezone.utc)
-        run_context = {
-            "Run-ID": f"SDM-{run_started_utc.strftime('%Y%m%dT%H%M%SZ')}-{uuid4().hex[:8]}",
-            "Modus": "SENDEN" if is_send_mode else "DRAFTS",
-            "Zeitpunkt UTC": run_started_utc.replace(microsecond=0).isoformat().replace("+00:00", "Z"),
-            "Ausgewaehlte Mails": selected_count,
-            "Sheet": sheet_name,
-            "Event": f"{event_city.strip() or DEFAULT_EVENT_CITY} | {event_start.isoformat()} bis {event_end.isoformat()}",
-            "Sender": sender_email,
-        }
         st.session_state["sdm_mail_log_records"] = None
-        st.session_state["sdm_mail_run_context"] = run_context
+        st.session_state["sdm_mail_run_context"] = None
         st.session_state["sdm_mail_run_error"] = None
-        try:
-            if is_send_mode:
-                records = create_smtp_sends(
-                    selected_mails,
-                    SmtpSendConfig(
-                        host=base_smtp_config.host,
-                        port=base_smtp_config.port,
-                        username=sender_email,
-                        password=sender_password,
-                        use_ssl=base_smtp_config.use_ssl,
-                        use_starttls=base_smtp_config.use_starttls,
-                        timeout_seconds=base_smtp_config.timeout_seconds,
-                    ),
-                    sent_copy_config=ImapAppendConfig(
-                        host=base_imap_config.host,
-                        port=base_imap_config.port,
-                        username=sender_email,
-                        password=sender_password,
-                        mailbox=base_sent_folder or "INBOX.Sent",
-                        use_ssl=base_imap_config.use_ssl,
-                    ),
-                )
-            else:
-                records = create_imap_drafts(
-                    selected_mails,
-                    ImapDraftConfig(
-                        host=base_imap_config.host,
-                        port=base_imap_config.port,
-                        username=sender_email,
-                        password=sender_password,
-                        drafts_folder=base_imap_config.drafts_folder,
-                        use_ssl=base_imap_config.use_ssl,
-                    ),
-                )
-        except Exception as exc:
-            st.session_state["sdm_mail_run_error"] = str(exc)
-            st.error(
-                f"{'Die E-Mails konnten nicht gesendet werden' if is_send_mode else 'Die Entwuerfe konnten nicht gespeichert werden'}: {exc}"
+        run_started_utc = datetime.now(timezone.utc)
+        if is_send_mode:
+            batch_assessment = assess_html_mail_batch(
+                (mail.subject, mail.html_body)
+                for mail in selected_mails
             )
+            batch_feedback = evaluate_send_guard(mail_mode, batch_assessment)
+            _show_guard_feedback(batch_feedback)
         else:
-            st.session_state["sdm_mail_log_records"] = records
-            success_status = "sent" if is_send_mode else "draft_created"
-            success_count = sum(record.result == success_status for record in records)
-            error_count = sum(record.result == "error" for record in records)
-            warning_count = sum(record.result == success_status and (record.details or "").strip() for record in records)
-            if error_count:
-                st.warning(
-                    f"{'Gesendet' if is_send_mode else 'Entwuerfe gespeichert'}: {success_count}, Hinweise: {warning_count}, Fehler: {error_count}"
+            batch_feedback = None
+
+        if not (batch_feedback and batch_feedback.blocked):
+            run_context = {
+                "Run-ID": f"SDM-{run_started_utc.strftime('%Y%m%dT%H%M%SZ')}-{uuid4().hex[:8]}",
+                "Modus": "SENDEN" if is_send_mode else "DRAFTS",
+                "Zeitpunkt UTC": run_started_utc.replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+                "Ausgewaehlte Mails": selected_count,
+                "Sheet": sheet_name,
+                "Event": f"{event_city.strip() or DEFAULT_EVENT_CITY} | {event_start.isoformat()} bis {event_end.isoformat()}",
+                "Sender": sender_email,
+            }
+            st.session_state["sdm_mail_run_context"] = run_context
+            try:
+                if is_send_mode:
+                    records = create_smtp_sends(
+                        selected_mails,
+                        SmtpSendConfig(
+                            host=base_smtp_config.host,
+                            port=base_smtp_config.port,
+                            username=sender_email,
+                            password=sender_password,
+                            use_ssl=base_smtp_config.use_ssl,
+                            use_starttls=base_smtp_config.use_starttls,
+                            timeout_seconds=base_smtp_config.timeout_seconds,
+                        ),
+                        sent_copy_config=ImapAppendConfig(
+                            host=base_imap_config.host,
+                            port=base_imap_config.port,
+                            username=sender_email,
+                            password=sender_password,
+                            mailbox=base_sent_folder or "INBOX.Sent",
+                            use_ssl=base_imap_config.use_ssl,
+                        ),
+                    )
+                else:
+                    records = create_imap_drafts(
+                        selected_mails,
+                        ImapDraftConfig(
+                            host=base_imap_config.host,
+                            port=base_imap_config.port,
+                            username=sender_email,
+                            password=sender_password,
+                            drafts_folder=base_imap_config.drafts_folder,
+                            use_ssl=base_imap_config.use_ssl,
+                        ),
+                    )
+            except Exception as exc:
+                st.session_state["sdm_mail_run_error"] = str(exc)
+                st.error(
+                    f"{'Die E-Mails konnten nicht gesendet werden' if is_send_mode else 'Die Entwuerfe konnten nicht gespeichert werden'}: {exc}"
                 )
             else:
-                st.success(
-                    f"{'Gesendet' if is_send_mode else 'Entwuerfe gespeichert'}: {success_count}"
-                    + (f", Hinweise: {warning_count}" if warning_count else "")
-                )
+                st.session_state["sdm_mail_log_records"] = records
+                success_status = "sent" if is_send_mode else "draft_created"
+                success_count = sum(record.result == success_status for record in records)
+                error_count = sum(record.result == "error" for record in records)
+                warning_count = sum(record.result == success_status and (record.details or "").strip() for record in records)
+                if error_count:
+                    st.warning(
+                        f"{'Gesendet' if is_send_mode else 'Entwuerfe gespeichert'}: {success_count}, Hinweise: {warning_count}, Fehler: {error_count}"
+                    )
+                else:
+                    st.success(
+                        f"{'Gesendet' if is_send_mode else 'Entwuerfe gespeichert'}: {success_count}"
+                        + (f", Hinweise: {warning_count}" if warning_count else "")
+                    )
 
 mail_log_records = st.session_state.get("sdm_mail_log_records")
 mail_run_context = st.session_state.get("sdm_mail_run_context")

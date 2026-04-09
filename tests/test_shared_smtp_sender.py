@@ -24,6 +24,7 @@ def _make_config(**overrides) -> SmtpSendConfig:
         use_ssl=True,
         use_starttls=False,
         timeout_seconds=30,
+        delay_between_messages_seconds=0.75,
     )
     defaults.update(overrides)
     return SmtpSendConfig(**defaults)
@@ -428,6 +429,34 @@ class SendEmailMessagesTests(unittest.TestCase):
         self.assertEqual(2, connection.send_message.call_count)
         self.assertEqual("First", connection.send_message.call_args_list[0].args[0]["Subject"])
         self.assertEqual("Second", connection.send_message.call_args_list[1].args[0]["Subject"])
+
+    @patch("shared.smtp_sender.time.sleep")
+    @patch("shared.smtp_sender.smtplib.SMTP_SSL")
+    def test_multiple_messages_apply_delay_between_sends(self, mock_smtp_ssl, mock_sleep):
+        connection = MagicMock()
+        connection.send_message.return_value = {}
+        mock_smtp_ssl.return_value = connection
+
+        send_email_messages(
+            [
+                _make_prepared(to_email="first@example.com", subject="First"),
+                _make_prepared(to_email="second@example.com", subject="Second"),
+            ],
+            _make_config(delay_between_messages_seconds=0.5),
+        )
+
+        mock_sleep.assert_called_once_with(0.5)
+
+    @patch("shared.smtp_sender.time.sleep")
+    @patch("shared.smtp_sender.smtplib.SMTP_SSL")
+    def test_single_message_does_not_sleep(self, mock_smtp_ssl, mock_sleep):
+        connection = MagicMock()
+        connection.send_message.return_value = {}
+        mock_smtp_ssl.return_value = connection
+
+        send_email_messages([_make_prepared()], _make_config(delay_between_messages_seconds=0.5))
+
+        mock_sleep.assert_not_called()
 
     def test_invalid_ssl_starttls_combo_raises_value_error(self):
         with self.assertRaises(ValueError):

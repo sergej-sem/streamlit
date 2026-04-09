@@ -4,6 +4,7 @@ import copy
 import re
 import socket
 import smtplib
+import time
 from dataclasses import dataclass
 from email import utils as email_utils
 from email.message import EmailMessage
@@ -20,6 +21,7 @@ class SmtpSendConfig:
     use_ssl: bool = True
     use_starttls: bool = False
     timeout_seconds: int = 30
+    delay_between_messages_seconds: float = 0.75
 
 
 @dataclass(frozen=True)
@@ -152,7 +154,8 @@ def send_email_messages(
     login_mailbox = _normalized_mailbox(config.username)
 
     try:
-        for item in messages:
+        total_messages = len(messages)
+        for index, item in enumerate(messages):
             try:
                 header_from = _normalized_mailbox(item.message.get("From", ""))
                 if not header_from or header_from != login_mailbox:
@@ -195,6 +198,11 @@ def send_email_messages(
                         details=_friendly_smtp_error(str(exc)),
                     )
                 )
+            if (
+                index < total_messages - 1
+                and config.delay_between_messages_seconds > 0
+            ):
+                time.sleep(config.delay_between_messages_seconds)
     finally:
         try:
             connection.quit()
