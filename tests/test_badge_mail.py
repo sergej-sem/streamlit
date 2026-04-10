@@ -152,6 +152,23 @@ class BuildBadgeMailsTests(unittest.TestCase):
         )
         self.assertEqual(1, mails[0].html_body.count("Severin Wagner"))
 
+    def test_rich_text_body_template_keeps_links(self):
+        df = self._df([_row(firstname="Eva", company="Corp")])
+        mails, _ = build_badge_mails(
+            df,
+            "Betreff",
+            "",
+            "",
+            self._tpl_map,
+            body_html_template=(
+                '<p><a href="https://mysecurityevent.de" style="color:#0078D4">'
+                "Zum Event"
+                "</a></p>"
+            ),
+        )
+        self.assertIn('href="https://mysecurityevent.de"', mails[0].html_body)
+        self.assertIn(">Zum Event</a>", mails[0].html_body)
+
     # ── mixed input ─────────────────────────────────────────────────────────
 
     def test_returns_correct_counts_mixed(self):

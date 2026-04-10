@@ -9,9 +9,66 @@ from html import unescape as _unescape
 from shared.mail_signatures import SIGNATURE_SEVERIN_HTML
 
 
+_ANCHOR_RE = re.compile(r"(?is)<a\b(?P<attrs>[^>]*)>(?P<text>.*?)</a>")
+_WHITESPACE_RE = re.compile(r"\s+")
+
+
+def _strip_tags_to_inline_text(html_fragment: str) -> str:
+    text = re.sub(r"(?is)<(script|style).*?>.*?</\1>", "", html_fragment)
+    text = re.sub(r"(?i)<br\s*/?>", " ", text)
+    text = re.sub(r"(?s)<.*?>", "", text)
+    text = _unescape(text)
+    return _WHITESPACE_RE.sub(" ", text).strip()
+
+
+def _extract_href(attrs: str) -> str:
+    match = re.search(
+        r"""(?is)\bhref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))""",
+        attrs or "",
+    )
+    if not match:
+        return ""
+    return _unescape(next(group for group in match.groups() if group is not None)).strip()
+
+
+def _display_link_target(href: str) -> str:
+    normalized = (href or "").strip()
+    lower = normalized.lower()
+    if lower.startswith("mailto:"):
+        return normalized[7:].strip()
+    if lower.startswith("tel:"):
+        return normalized[4:].strip()
+    return normalized
+
+
+def _normalized_link_value(value: str) -> str:
+    normalized = _WHITESPACE_RE.sub(" ", _unescape(value or "")).strip()
+    lower = normalized.lower()
+    if lower.startswith(("http://", "https://")):
+        return normalized.rstrip("/")
+    return normalized
+
+
+def _anchor_to_plain_text(match: re.Match[str]) -> str:
+    href = _extract_href(match.group("attrs") or "")
+    label = _strip_tags_to_inline_text(match.group("text") or "")
+    display_target = _display_link_target(href)
+
+    if not href:
+        return label
+    if not label:
+        return display_target
+
+    if _normalized_link_value(label) == _normalized_link_value(display_target):
+        return label
+
+    return f"{label} ({display_target})"
+
+
 def html_to_plain_text(html_body: str) -> str:
     """Convert an HTML email body to a plain-text fallback."""
     text = re.sub(r"(?is)<(script|style).*?>.*?</\1>", "", html_body)
+    text = _ANCHOR_RE.sub(_anchor_to_plain_text, text)
     text = re.sub(r"(?i)<br\s*/?>", "\n", text)
     text = re.sub(r"(?i)</p>", "\n\n", text)
     text = re.sub(r"(?s)<.*?>", "", text)

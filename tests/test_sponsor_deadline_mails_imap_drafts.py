@@ -111,6 +111,15 @@ class HtmlToPlainTextTests(unittest.TestCase):
         result = _html_to_plain_text("<p>A</p>\n\n\n\n<p>B</p>")
         self.assertNotIn("\n\n\n", result)
 
+    def test_anchor_with_label_keeps_target_in_parentheses(self):
+        result = _html_to_plain_text('<p><a href="https://mysecurityevent.de">Zum Event</a></p>')
+        self.assertIn("Zum Event (https://mysecurityevent.de)", result)
+
+    def test_mailto_anchor_with_same_visible_text_is_not_duplicated(self):
+        result = _html_to_plain_text('<p><a href="mailto:info@mysecurityevent.de">info@mysecurityevent.de</a></p>')
+        self.assertIn("info@mysecurityevent.de", result)
+        self.assertNotIn("mailto:", result)
+
     def test_empty_input_returns_fallback(self):
         result = _html_to_plain_text("")
         self.assertTrue(len(result) > 0)

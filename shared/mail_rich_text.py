@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html
+import json
 import re
 from collections.abc import Mapping
 
@@ -24,13 +25,16 @@ _ALLOWED_TAGS = [
     "em",
     "u",
     "span",
+    "a",
     "ol",
     "ul",
     "li",
 ]
 _ALLOWED_ATTRIBUTES = {
     "*": ["style"],
+    "a": ["href", "title", "target", "rel"],
 }
+_ALLOWED_PROTOCOLS = ["http", "https", "mailto", "tel"]
 _CSS_SANITIZER = (
     CSSSanitizer(
         allowed_css_properties=[
@@ -57,7 +61,7 @@ _SIZE_STYLE_MAP = {
 }
 _QUILL_TOOLBAR = [
     [{"font": ["", "serif", "monospace"]}, {"size": ["small", False, "large", "huge"]}],
-    ["bold", "italic", "underline"],
+    ["bold", "italic", "underline", "link"],
     [{"color": []}, {"background": []}],
     ["clean"],
 ]
@@ -66,6 +70,227 @@ _QUILL_HISTORY = {
     "maxStack": 100,
     "userOnly": True,
 }
+_QUILL_UI_BRIDGE_STYLE = """
+.ql-snow .ql-picker.ql-font {
+  width: 122px !important;
+}
+.ql-snow .ql-picker.ql-font .ql-picker-label::before,
+.ql-snow .ql-picker.ql-font .ql-picker-item::before {
+  content: 'Serifenlos' !important;
+}
+.ql-snow .ql-picker.ql-font .ql-picker-label[data-value=serif]::before,
+.ql-snow .ql-picker.ql-font .ql-picker-item[data-value=serif]::before {
+  content: 'Serif' !important;
+}
+.ql-snow .ql-picker.ql-font .ql-picker-label[data-value=monospace]::before,
+.ql-snow .ql-picker.ql-font .ql-picker-item[data-value=monospace]::before {
+  content: 'Monoschrift' !important;
+}
+.ql-snow .ql-picker.ql-size .ql-picker-label::before,
+.ql-snow .ql-picker.ql-size .ql-picker-item::before {
+  content: 'Normal' !important;
+}
+.ql-snow .ql-picker.ql-size .ql-picker-label[data-value=small]::before,
+.ql-snow .ql-picker.ql-size .ql-picker-item[data-value=small]::before {
+  content: 'Klein' !important;
+}
+.ql-snow .ql-picker.ql-size .ql-picker-label[data-value=large]::before,
+.ql-snow .ql-picker.ql-size .ql-picker-item[data-value=large]::before {
+  content: 'Groß' !important;
+}
+.ql-snow .ql-picker.ql-size .ql-picker-label[data-value=huge]::before,
+.ql-snow .ql-picker.ql-size .ql-picker-item[data-value=huge]::before {
+  content: 'Riesig' !important;
+}
+.ql-snow .ql-tooltip::before {
+  content: 'Link öffnen:' !important;
+}
+.ql-snow .ql-tooltip a.ql-action::after {
+  content: 'Bearbeiten' !important;
+}
+.ql-snow .ql-tooltip a.ql-remove::before {
+  content: 'Entfernen' !important;
+}
+.ql-snow .ql-tooltip.ql-editing a.ql-action::after {
+  content: 'Speichern' !important;
+}
+.ql-snow .ql-tooltip[data-mode=link]::before {
+  content: 'Link eingeben:' !important;
+}
+"""
+
+
+def _quill_ui_bridge_html() -> str:
+    return f"""
+<script>
+(function() {{
+  const styleId = "mse-quill-de-style";
+  const observerFlag = "__mseQuillUiObserver";
+  const urlPattern = /^(https?:\\/\\/|mailto:|tel:)/i;
+  const styleText = {json.dumps(_QUILL_UI_BRIDGE_STYLE, ensure_ascii=False)};
+
+  function isUrlLike(value) {{
+    return urlPattern.test(String(value || "").trim());
+  }}
+
+  function clearNonUrlPrefill(input) {{
+    if (!input) {{
+      return;
+    }}
+    const trimmed = String(input.value || "").trim();
+    const lastCheckedValue = input.getAttribute("data-mse-last-checked-value") || "";
+    if (lastCheckedValue === trimmed) {{
+      return;
+    }}
+    input.setAttribute("data-mse-last-checked-value", trimmed);
+    if (trimmed && !isUrlLike(trimmed)) {{
+      input.value = "";
+      input.setAttribute("data-mse-last-checked-value", "");
+      input.dispatchEvent(new Event("input", {{ bubbles: true }}));
+      input.dispatchEvent(new Event("change", {{ bubbles: true }}));
+    }}
+    input.focus();
+    if (typeof input.setSelectionRange === "function") {{
+      input.setSelectionRange(0, 0);
+    }}
+  }}
+
+  function scheduleLinkInputChecks(input) {{
+    clearNonUrlPrefill(input);
+    window.requestAnimationFrame(function() {{
+      clearNonUrlPrefill(input);
+    }});
+    window.setTimeout(function() {{
+      clearNonUrlPrefill(input);
+    }}, 0);
+    window.setTimeout(function() {{
+      clearNonUrlPrefill(input);
+    }}, 60);
+  }}
+
+  function installLinkHandlerOverride(doc) {{
+    doc.querySelectorAll(".ql-container").forEach(function(container) {{
+      const quill = container && container.__quill;
+      if (!quill || quill.__mseLinkHandlerPatched) {{
+        return;
+      }}
+      const toolbar = typeof quill.getModule === "function" ? quill.getModule("toolbar") : null;
+      const tooltip = quill.theme && quill.theme.tooltip;
+      if (!toolbar || typeof toolbar.addHandler !== "function" || !tooltip || typeof tooltip.edit !== "function") {{
+        return;
+      }}
+
+      toolbar.addHandler("link", function(value) {{
+        if (!value) {{
+          quill.format("link", false);
+          return;
+        }}
+
+        const range = quill.getSelection();
+        if (range == null || range.length === 0) {{
+          return;
+        }}
+
+        let existingLink = "";
+        if (typeof quill.getFormat === "function") {{
+          const formats = quill.getFormat(range);
+          if (formats && typeof formats.link === "string") {{
+            existingLink = formats.link;
+          }}
+        }}
+
+        tooltip.edit("link", existingLink || "");
+      }});
+
+      quill.__mseLinkHandlerPatched = true;
+    }});
+  }}
+
+  function syncLinkTooltip(doc) {{
+    const tooltip = doc.querySelector(".ql-tooltip[data-mode='link']");
+    if (!tooltip) {{
+      return;
+    }}
+    const isEditing = tooltip.classList.contains("ql-editing");
+    const wasEditing = tooltip.getAttribute("data-mse-link-editing") === "true";
+    tooltip.setAttribute("data-mse-link-editing", isEditing ? "true" : "false");
+    if (!isEditing) {{
+      return;
+    }}
+    const input = tooltip.querySelector("input[type='text']");
+    if (!input) {{
+      return;
+    }}
+    if (!input.getAttribute("data-mse-input-observed")) {{
+      input.setAttribute("data-mse-input-observed", "true");
+      input.addEventListener("input", function() {{
+        clearNonUrlPrefill(input);
+      }});
+    }}
+    clearNonUrlPrefill(input);
+    if (!wasEditing) {{
+      scheduleLinkInputChecks(input);
+    }}
+  }}
+
+  function installBridge(doc) {{
+    if (!doc || !doc.head || !doc.body) {{
+      return;
+    }}
+    if (!doc.querySelector(".ql-toolbar, .ql-container, .ql-editor")) {{
+      return;
+    }}
+    if (!doc.getElementById(styleId)) {{
+      const style = doc.createElement("style");
+      style.id = styleId;
+      style.textContent = styleText;
+      doc.head.appendChild(style);
+    }}
+    installLinkHandlerOverride(doc);
+    syncLinkTooltip(doc);
+    const view = doc.defaultView;
+    if (!view || view[observerFlag]) {{
+      return;
+    }}
+    const observer = new MutationObserver(function() {{
+      syncLinkTooltip(doc);
+    }});
+    observer.observe(doc.body, {{
+      subtree: true,
+      childList: true,
+      attributes: true,
+      attributeFilter: ["class", "data-mode"],
+    }});
+    view[observerFlag] = observer;
+  }}
+
+  function scanQuillFrames() {{
+    const parentDoc = window.parent && window.parent.document;
+    if (!parentDoc) {{
+      return;
+    }}
+    parentDoc.querySelectorAll("iframe").forEach(function(frame) {{
+      try {{
+        installBridge(frame.contentDocument);
+      }} catch (error) {{
+      }}
+    }});
+  }}
+
+  scanQuillFrames();
+  const intervalId = window.setInterval(scanQuillFrames, 400);
+  window.addEventListener("beforeunload", function() {{
+    window.clearInterval(intervalId);
+  }});
+}})();
+</script>
+"""
+
+
+def _render_quill_ui_bridge() -> None:
+    import streamlit.components.v1 as components
+
+    components.html(_quill_ui_bridge_html(), height=0, width=0)
 
 
 def default_mail_body_text() -> str:
@@ -134,6 +359,7 @@ def render_mail_rich_text_editor(
         preserve_whitespace=True,
         key=widget_key,
     )
+    _render_quill_ui_bridge()
     html_result = storage_value if result is None else str(result)
     st.session_state[key] = html_result
     return html_result
@@ -258,6 +484,7 @@ def sanitize_editor_html(value: str | None) -> str:
         inlined,
         tags=_ALLOWED_TAGS,
         attributes=_ALLOWED_ATTRIBUTES,
+        protocols=_ALLOWED_PROTOCOLS,
         strip=True,
         css_sanitizer=_CSS_SANITIZER,
     )

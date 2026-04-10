@@ -6,10 +6,12 @@ sys.path.insert(0, os.path.normpath(os.path.join(os.path.dirname(__file__), ".."
 
 from shared.mail_signatures import SIGNATURE_SEVERIN_HTML
 from shared.mail_rich_text import (
+    _quill_ui_bridge_html,
     default_mail_body_html,
     default_mail_body_text,
     editor_html_is_meaningful,
     plain_text_to_editor_html,
+    quill_toolbar_config,
     render_final_mail_html,
     render_personalized_rich_text_html,
     sanitize_editor_html,
@@ -27,6 +29,30 @@ class MailRichTextDefaultsTests(unittest.TestCase):
         html = plain_text_to_editor_html("\n\nBeste Grüße,")
         self.assertIn("Beste Grüße,", html)
 
+    def test_quill_toolbar_contains_link_tool(self):
+        self.assertIn("link", str(quill_toolbar_config()))
+
+    def test_quill_ui_bridge_contains_german_labels_and_link_handler_override(self):
+        bridge_html = _quill_ui_bridge_html()
+        self.assertIn("Link eingeben:", bridge_html)
+        self.assertIn("Speichern", bridge_html)
+        self.assertIn("Serifenlos", bridge_html)
+        self.assertIn("Klein", bridge_html)
+        self.assertIn("Groß", bridge_html)
+        self.assertIn("Riesig", bridge_html)
+        self.assertIn("container.__quill", bridge_html)
+        self.assertIn('getModule("toolbar")', bridge_html)
+        self.assertIn('toolbar.addHandler("link"', bridge_html)
+        self.assertIn('tooltip.edit("link", existingLink || "")', bridge_html)
+        self.assertIn("__mseLinkHandlerPatched", bridge_html)
+        self.assertIn("clearNonUrlPrefill", bridge_html)
+        self.assertIn("!isUrlLike(trimmed)", bridge_html)
+        self.assertIn('input.value = ""', bridge_html)
+        self.assertIn("requestAnimationFrame", bridge_html)
+        self.assertIn("setTimeout", bridge_html)
+        self.assertIn('data-mse-link-editing', bridge_html)
+        self.assertNotIn('data-mse-link-state', bridge_html)
+
 
 class MailRichTextSanitizationTests(unittest.TestCase):
     def test_sanitize_editor_html_keeps_allowed_formatting_and_inlines_known_quill_classes(self):
@@ -39,6 +65,19 @@ class MailRichTextSanitizationTests(unittest.TestCase):
         self.assertIn("color", cleaned)
         self.assertNotIn("script", cleaned.lower())
         self.assertNotIn("ql-size-large", cleaned)
+
+    def test_sanitize_editor_html_keeps_links_and_safe_attributes(self):
+        cleaned = sanitize_editor_html(
+            '<p><a href="https://mysecurityevent.de" target="_blank" rel="noopener" '
+            'title="MSE" style="color:#0078D4;font-size:1.25em">Link</a></p>'
+        )
+        self.assertIn("<a ", cleaned)
+        self.assertIn('href="https://mysecurityevent.de"', cleaned)
+        self.assertIn('target="_blank"', cleaned)
+        self.assertIn('rel="noopener"', cleaned)
+        self.assertIn('title="MSE"', cleaned)
+        self.assertIn("color", cleaned)
+        self.assertIn("font-size", cleaned)
 
     def test_render_personalized_rich_text_html_replaces_placeholders_and_escapes_values(self):
         rendered = render_personalized_rich_text_html(
@@ -74,6 +113,15 @@ class MailRichTextSanitizationTests(unittest.TestCase):
             sender_email="severin.wagner@mysecurityevent.de",
             vorname="Jörg",
         )
+        self.assertEqual(1, rendered.count("Severin Wagner"))
+
+    def test_render_final_mail_html_keeps_links(self):
+        rendered = render_final_mail_html(
+            '<p><a href="https://mysecurityevent.de" style="color:#0078D4">Link</a></p>',
+            sender_email="severin.wagner@mysecurityevent.de",
+        )
+        self.assertIn('href="https://mysecurityevent.de"', rendered)
+        self.assertIn(">Link</a>", rendered)
         self.assertEqual(1, rendered.count("Severin Wagner"))
 
 
