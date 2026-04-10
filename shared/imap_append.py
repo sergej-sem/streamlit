@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from email.message import EmailMessage
 from email.policy import SMTP
 
+from shared.mail_errors import friendly_imap_append_error
+
 
 @dataclass(frozen=True)
 class ImapAppendConfig:
@@ -24,14 +26,7 @@ def _connect(config: ImapAppendConfig):
 
 
 def _friendly_imap_append_error(raw: str) -> str:
-    text = (raw or "").lower()
-    if "authenticationfailed" in text or "authentication failed" in text or "invalid credentials" in text:
-        return "Sent-Kopie konnte nicht gespeichert werden: Anmeldung am Postfach fehlgeschlagen."
-    if "nonexistent" in text or "mailbox does not exist" in text or "no such mailbox" in text:
-        return "Sent-Kopie konnte nicht gespeichert werden: Gesendet-Ordner nicht gefunden."
-    if "connection refused" in text or "timed out" in text or "errno" in text:
-        return "Sent-Kopie konnte nicht gespeichert werden: Verbindung zum Mailserver fehlgeschlagen."
-    return f"Sent-Kopie konnte nicht gespeichert werden: {raw}"
+    return friendly_imap_append_error(raw)
 
 
 def append_message_to_mailbox(

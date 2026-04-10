@@ -39,6 +39,8 @@ from shared.mail_content_guard import (
     assess_html_mail_content,
     evaluate_send_guard,
 )
+from shared.mail_errors import friendly_with_technical_hint
+from shared.mail_errors import friendly_config_issue
 from shared.mail_progress import create_streamlit_smtp_progress_reporter
 from shared.mail_rich_text import (
     editor_html_is_meaningful,
@@ -176,7 +178,12 @@ with tab_excel:
                 _apply_contacts(contacts)
                 st.rerun()
         except Exception as exc:
-            st.error(f"Fehler beim Lesen der Datei: {exc}")
+            st.error(
+                friendly_with_technical_hint(
+                    "Die Datei konnte nicht gelesen werden. Bitte prüfe Format und Inhalt.",
+                    exc,
+                )
+            )
 
 with tab_hs:
     try:
@@ -198,9 +205,14 @@ with tab_hs:
                         _apply_contacts(contacts)
                         st.rerun()
                     except Exception as exc:
-                        st.error(f"HubSpot-Fehler: {exc}")
+                        st.error(
+                            friendly_with_technical_hint(
+                                "Die Kontakte aus HubSpot konnten nicht geladen werden.",
+                                exc,
+                            )
+                        )
     except Exception as exc:
-        st.warning(f"HubSpot nicht verfügbar: {exc}")
+        st.warning(friendly_with_technical_hint("HubSpot ist aktuell nicht erreichbar.", exc))
 
 with tab_manual:
     manual_template = pd.DataFrame({"vorname": [""], "firma": [""], "email": [""]})
@@ -318,11 +330,26 @@ confirm_input = st.text_input(
 confirmed = confirm_input.strip() == expected_confirm and n_contacts > 0
 
 if is_send_mode and not smtp_host:
-    st.warning("SMTP-Konfiguration fehlt. Bitte `mse_smtp_mail_send` in den Secrets prüfen.")
+    st.warning(
+        friendly_config_issue(
+            "E-Mail-Senden ist aktuell nicht eingerichtet.",
+            "Bitte `mse_smtp_mail_send` in den Secrets prüfen.",
+        )
+    )
 elif is_send_mode and not imap_host:
-    st.warning("IMAP-Konfiguration für die Sent-Kopie fehlt. Bitte `mse_imap_mail_drafts` in den Secrets prüfen.")
+    st.warning(
+        friendly_config_issue(
+            "Die Sent-Kopie ist aktuell nicht eingerichtet.",
+            "Bitte `mse_imap_mail_drafts` in den Secrets prüfen.",
+        )
+    )
 elif (not is_send_mode) and not imap_host:
-    st.warning("IMAP-Draft-Konfiguration fehlt. Bitte `mse_imap_mail_drafts` in den Secrets prüfen.")
+    st.warning(
+        friendly_config_issue(
+            "Das Speichern von Entwürfen ist aktuell nicht eingerichtet.",
+            "Bitte `mse_imap_mail_drafts` in den Secrets prüfen.",
+        )
+    )
 
 ready = (
     confirmed
@@ -412,7 +439,14 @@ if st.button(button_label, disabled=not ready, type="primary"):
                     )
             st.session_state["sm_mail_result"] = {"mode": mail_mode, "results": results}
         except Exception as exc:
-            st.error(str(exc))
+            st.error(
+                friendly_with_technical_hint(
+                    "Die E-Mails konnten nicht gesendet werden."
+                    if is_send_mode
+                    else "Die Entwürfe konnten nicht erstellt werden.",
+                    exc,
+                )
+            )
 
 mail_result = st.session_state.get("sm_mail_result")
 if mail_result:

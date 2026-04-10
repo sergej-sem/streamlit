@@ -6,6 +6,7 @@ import imaplib
 import time
 from dataclasses import dataclass
 
+from shared.mail_errors import friendly_imap_draft_error, friendly_with_technical_hint
 from shared.mail_message import build_email_message_bytes
 
 
@@ -59,14 +60,7 @@ def _connect(config: MailConfig):
 
 def _friendly_imap_error(raw: str) -> str:
     """Translate raw IMAP/network error strings into user-friendly German messages."""
-    s = raw.lower()
-    if "authenticationfailed" in s or "authentication failed" in s or "invalid credentials" in s:
-        return "Anmeldung fehlgeschlagen. Bitte E-Mail-Adresse und Passwort prüfen."
-    if "nonexistent" in s or "mailbox does not exist" in s or "no such mailbox" in s:
-        return "Entwurfs-Ordner nicht gefunden. Bitte den Ordnernamen in den Einstellungen prüfen."
-    if "connection refused" in s or "timed out" in s or "errno" in s:
-        return "Verbindung zum Mailserver fehlgeschlagen. Bitte Netzwerk und Serveradresse prüfen."
-    return raw
+    return friendly_imap_draft_error(raw)
 
 
 def create_serienmailing_drafts(
@@ -94,7 +88,10 @@ def create_serienmailing_drafts(
         select_status, select_data = connection.select(config.drafts_folder)
         if select_status != "OK":
             raise RuntimeError(
-                _friendly_imap_error(f"nonexistent: {config.drafts_folder} {select_data}")
+                friendly_with_technical_hint(
+                    "Der Entwurfs-Ordner konnte im Postfach nicht geöffnet werden. Bitte den Ordnernamen in den Einstellungen prüfen.",
+                    select_data,
+                )
             )
 
         for mail in mails:
@@ -106,7 +103,12 @@ def create_serienmailing_drafts(
                     _build_message(mail, config),
                 )
                 if append_status != "OK":
-                    raise RuntimeError(f"APPEND fehlgeschlagen: {append_status}")
+                    raise RuntimeError(
+                        friendly_with_technical_hint(
+                            "Der Entwurf konnte nicht im Postfach gespeichert werden.",
+                            append_status,
+                        )
+                    )
                 results.append(SerienMailResult(
                     to_email=mail.to_email,
                     vorname=mail.vorname,

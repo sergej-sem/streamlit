@@ -79,7 +79,8 @@ class FriendlyImapErrorTests(unittest.TestCase):
     def test_unknown_error_passthrough(self):
         raw = "Einige unbekannte Fehlermeldung"
         result = _friendly_imap_error(raw)
-        self.assertEqual(raw, result)
+        self.assertIn("Entwurfsordner", result)
+        self.assertIn("Technischer Hinweis:", result)
 
     def test_case_insensitive(self):
         result = _friendly_imap_error("TIMED OUT")
@@ -284,6 +285,7 @@ class CreateDraftsMockedTests(unittest.TestCase):
         results = create_serienmailing_drafts([_make_mail()], _make_config())
         self.assertEqual(1, len(results))
         self.assertEqual("error", results[0].status)
+        self.assertIn("Entwurf", results[0].details)
 
     @patch("serienmailing.imap_sender.imaplib.IMAP4_SSL")
     def test_connection_error_raises_runtime_error(self, mock_imap4_ssl):

@@ -12,6 +12,7 @@ from email import utils as email_utils
 from email.message import EmailMessage
 
 from shared.imap_append import ImapAppendConfig, append_message_to_mailbox
+from shared.mail_errors import friendly_smtp_transport_error
 
 DEFAULT_SEND_DELAY_MIN_SECONDS = 3.0
 DEFAULT_SEND_DELAY_MAX_SECONDS = 6.0
@@ -59,22 +60,7 @@ class SmtpSendProgress:
 
 
 def _friendly_smtp_error(raw: str) -> str:
-    text = (raw or "").lower()
-    if (
-        "authentication failed" in text
-        or "auth failed" in text
-        or "invalid credentials" in text
-        or "smtp authentication error" in text
-        or "5.7.8" in text
-    ):
-        return "Anmeldung fehlgeschlagen. Bitte E-Mail-Adresse und Passwort prüfen."
-    if "starttls" in text or "tls" in text or "ssl" in text:
-        return "Die gesicherte Verbindung zum Mailserver ist fehlgeschlagen. Bitte die SMTP-Konfiguration prüfen."
-    if "connection refused" in text or "timed out" in text or "getaddrinfo failed" in text or "errno" in text:
-        return "Verbindung zum SMTP-Server fehlgeschlagen. Bitte Netzwerk und Serveradresse prüfen."
-    if "refused" in text or "rejected" in text:
-        return "Mindestens ein Empfänger wurde vom Mailserver abgelehnt."
-    return raw
+    return friendly_smtp_transport_error(raw)
 
 
 def _normalized_mailbox(value: str) -> str:

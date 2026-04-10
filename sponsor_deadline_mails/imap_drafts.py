@@ -6,6 +6,7 @@ from dataclasses import dataclass
 import pandas as pd
 
 from .core import GeneratedMail
+from shared.mail_errors import friendly_imap_draft_error, friendly_with_technical_hint
 from shared.mail_message import build_email_message_bytes
 
 
@@ -61,18 +62,27 @@ def create_imap_drafts(
     if not config.drafts_folder.strip():
         raise ValueError("Der Ordner für Entwürfe darf nicht leer sein.")
 
-    connection = _connect(config)
     records: list[ImapDraftRecord] = []
+    connection = None
 
     try:
+        connection = _connect(config)
         login_status, login_data = connection.login(config.username, config.password)
         if login_status != "OK":
-            raise RuntimeError(f"Die Anmeldung am Postfach ist fehlgeschlagen: {login_data}")
+            raise RuntimeError(
+                friendly_with_technical_hint(
+                    "Anmeldung fehlgeschlagen. Bitte E-Mail-Adresse und Passwort prüfen.",
+                    login_data,
+                )
+            )
 
         select_status, select_data = connection.select(config.drafts_folder)
         if select_status != "OK":
             raise RuntimeError(
-                f"Der Ordner '{config.drafts_folder}' konnte im Postfach nicht geöffnet werden: {select_data}"
+                friendly_with_technical_hint(
+                    "Der Entwurfs-Ordner konnte im Postfach nicht geöffnet werden. Bitte den Ordnernamen in den Einstellungen prüfen.",
+                    select_data,
+                )
             )
 
         for mail in mails:
@@ -84,7 +94,12 @@ def create_imap_drafts(
                     _build_message(mail, config),
                 )
                 if append_status != "OK":
-                    raise RuntimeError(str(append_data))
+                    raise RuntimeError(
+                        friendly_with_technical_hint(
+                            "Der Entwurf konnte nicht im Postfach gespeichert werden.",
+                            append_data,
+                        )
+                    )
 
                 response_text = ""
                 if append_data:
@@ -116,10 +131,12 @@ def create_imap_drafts(
                         mailbox=config.username,
                         drafts_folder=config.drafts_folder,
                         result="error",
-                        details=str(exc),
+                        details=friendly_imap_draft_error(str(exc)),
                         server_response="",
                     )
                 )
+    except (OSError, imaplib.IMAP4.error) as exc:
+        raise RuntimeError(friendly_imap_draft_error(str(exc))) from exc
     finally:
         try:
             connection.logout()

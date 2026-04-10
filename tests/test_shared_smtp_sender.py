@@ -73,6 +73,11 @@ class FriendlySmtpErrorTests(unittest.TestCase):
     def test_refused_error(self):
         self.assertIn("Empfänger", _friendly_smtp_error("Recipient refused"))
 
+    def test_unknown_error_is_friendly(self):
+        result = _friendly_smtp_error("Unexpected SMTP failure")
+        self.assertIn("SMTP-Fehler", result)
+        self.assertIn("Technischer Hinweis:", result)
+
 
 class SmtpLocalHostnameTests(unittest.TestCase):
     @patch("shared.smtp_sender.socket.gethostname", return_value="Admin-PC")

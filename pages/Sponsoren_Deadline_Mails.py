@@ -19,6 +19,8 @@ from shared.mail_content_guard import (
     assess_html_mail_content,
     evaluate_send_guard,
 )
+from shared.mail_errors import friendly_with_technical_hint
+from shared.mail_errors import friendly_config_issue
 from shared.mail_progress import create_streamlit_smtp_progress_reporter
 from shared.mail_signatures import signature_html_for_sender
 from shared.smtp_sender import (
@@ -208,8 +210,10 @@ st.caption(
 
 if base_imap_config is None and base_smtp_config is None:
     st.error(
-        "Für diese Seite ist weder eine IMAP-Draft- noch eine SMTP-Send-Konfiguration eingerichtet. "
-        "Bitte lass die technische Konfiguration prüfen."
+        friendly_config_issue(
+            "Die Mail-Funktion ist aktuell nicht eingerichtet.",
+            "Weder IMAP-Drafts noch SMTP-Senden sind konfiguriert.",
+        )
     )
     st.stop()
 
@@ -231,7 +235,7 @@ if st.session_state["sdm_file_token"] != file_token:
 try:
     sheet_names = _cached_sheet_names(excel_bytes)
 except Exception as exc:
-    st.error(f"Die Datei konnte nicht als Excel-Workbook gelesen werden: {exc}")
+    st.error(friendly_with_technical_hint("Die Excel-Datei konnte nicht gelesen werden.", exc))
     st.stop()
 
 default_sheet_index = sheet_names.index(DEFAULT_SHEET_NAME) if DEFAULT_SHEET_NAME in sheet_names else 0
@@ -277,7 +281,7 @@ if generate_clicked:
                 signature_html=signature_html_for_sender(sender_email),
             )
         except Exception as exc:
-            st.error(f"Generierung fehlgeschlagen: {exc}")
+            st.error(friendly_with_technical_hint("Die Sponsoren-E-Mails konnten nicht generiert werden.", exc))
         else:
             st.session_state["sdm_result"] = result
             st.session_state["sdm_generation_id"] += 1
@@ -364,13 +368,33 @@ if not sender_email:
 elif not sender_password:
     st.warning("Bitte gib Dein E-Mail-Passwort ein.")
 elif is_send_mode and base_smtp_config is None:
-    st.error("SMTP-Senden ist aktuell nicht eingerichtet. Bitte `mse_smtp_mail_send` prüfen.")
+    st.error(
+        friendly_config_issue(
+            "Das direkte Senden ist aktuell nicht eingerichtet.",
+            "Bitte `mse_smtp_mail_send` in den Secrets prüfen.",
+        )
+    )
 elif is_send_mode and base_imap_config is None:
-    st.error("IMAP-Konfiguration für die Sent-Kopie fehlt. Bitte `mse_imap_mail_drafts` prüfen.")
+    st.error(
+        friendly_config_issue(
+            "Die Sent-Kopie ist aktuell nicht eingerichtet.",
+            "Bitte `mse_imap_mail_drafts` in den Secrets prüfen.",
+        )
+    )
 elif (not is_send_mode) and base_imap_config is None:
-    st.error("IMAP-Drafts sind aktuell nicht eingerichtet. Bitte `mse_imap_mail_drafts` prüfen.")
+    st.error(
+        friendly_config_issue(
+            "Das Speichern von Entwürfen ist aktuell nicht eingerichtet.",
+            "Bitte `mse_imap_mail_drafts` in den Secrets prüfen.",
+        )
+    )
 elif (not is_send_mode) and not base_imap_config.drafts_folder.strip():
-    st.error("Der Ordner für Entwürfe ist aktuell nicht richtig eingerichtet. Bitte lass die Konfiguration prüfen.")
+    st.error(
+        friendly_config_issue(
+            "Der Entwurfsordner ist aktuell nicht korrekt eingerichtet.",
+            "Bitte die IMAP-Draft-Konfiguration prüfen.",
+        )
+    )
 elif not selected_mails:
     st.warning("Bitte mindestens einen Sponsor in der Tabelle auswählen.")
 else:
@@ -461,10 +485,14 @@ else:
                         ),
                     )
             except Exception as exc:
-                st.session_state["sdm_mail_run_error"] = str(exc)
-                st.error(
-                    f"{'Die E-Mails konnten nicht gesendet werden' if is_send_mode else 'Die Entwürfe konnten nicht gespeichert werden'}: {exc}"
+                error_message = friendly_with_technical_hint(
+                    "Die E-Mails konnten nicht gesendet werden."
+                    if is_send_mode
+                    else "Die Entwürfe konnten nicht gespeichert werden.",
+                    exc,
                 )
+                st.session_state["sdm_mail_run_error"] = error_message
+                st.error(error_message)
             else:
                 st.session_state["sdm_mail_log_records"] = records
                 success_status = "sent" if is_send_mode else "draft_created"

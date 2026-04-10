@@ -35,6 +35,7 @@ from shared.mail_content_guard import (
     assess_html_mail_content,
     evaluate_send_guard,
 )
+from shared.mail_errors import friendly_config_issue, friendly_with_technical_hint
 from shared.mail_progress import create_streamlit_smtp_progress_reporter
 from shared.mail_preview import missing_preview_requirements, preview_ready
 from shared.mail_rich_text import (
@@ -63,7 +64,12 @@ render_page_title("Badge Generator (HubSpot)")
 try:
     token = get_hubspot_token(st.secrets)
 except ConfigError:
-    st.error("❌ HUBSPOT_TOKEN fehlt. Lege ihn in .streamlit/secrets.toml ab.")
+    st.error(
+        friendly_config_issue(
+            "Die HubSpot-Anbindung ist aktuell nicht eingerichtet.",
+            "Bitte `HUBSPOT_TOKEN` in `.streamlit/secrets.toml` prüfen.",
+        )
+    )
     st.stop()
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -280,7 +286,7 @@ if search_clicked:
     try:
         df_new = run_search_cached(compiled_groups, token)
     except Exception as e:
-        st.error(f"❌ Suche fehlgeschlagen: {e}")
+        st.error(friendly_with_technical_hint("Die Kontakte konnten nicht geladen werden.", e))
         st.stop()
 
     if df_new.empty:
@@ -331,8 +337,8 @@ missing_cat = df[df["kategorie"].isna() | (df["kategorie"].astype(str).str.strip
 if not missing_cat.empty:
     issues = True
     st.error(
-        f"❌ Kategorie konnte NICHT ermittelt werden für {len(missing_cat)} Kontakt(e). "
-        "Ohne Kategorie wird KEIN PDF erzeugt."
+        f"Für {len(missing_cat)} Kontakt(e) konnte keine Badge-Kategorie ermittelt werden. "
+        "Für diese Kontakte werden keine PDFs erzeugt."
     )
     cols = ["id", "firstname", "lastname", "historie"]
     cols = [c for c in cols if c in missing_cat.columns]
@@ -342,12 +348,22 @@ if not missing_cat.empty:
 unknown_cats = sorted(set(df["kategorie"].dropna().unique()) - set(ALLOWED_CATEGORIES))
 if unknown_cats:
     issues = True
-    st.error("❌ Unerwartete Kategorie(n) gefunden:\n" + "\n".join(f"- {c}" for c in unknown_cats))
+    st.error(
+        friendly_config_issue(
+            "Einige Badge-Kategorien konnten nicht verarbeitet werden.",
+            "Unerwartete Kategorien: " + ", ".join(str(c) for c in unknown_cats),
+        )
+    )
 
 missing_files = [p for p in tpl_map.values() if not Path(p).exists()]
 if missing_files:
     issues = True
-    st.error("❌ Template-Dateien nicht gefunden:\n" + "\n".join(f"- {p}" for p in missing_files))
+    st.error(
+        friendly_config_issue(
+            "Einige Badge-Vorlagen fehlen.",
+            "Fehlende Dateien: " + ", ".join(str(p) for p in missing_files),
+        )
+    )
 
 if issues:
     st.stop()
@@ -394,7 +410,7 @@ with st.spinner("PDF wird vorbereitet …"):
             render_cache_token=badge_font_cache_token(),
         )
     except Exception as e:
-        st.error(f"❌ PDF-Erstellung fehlgeschlagen: {e}")
+        st.error(friendly_with_technical_hint("Die Badge-PDFs konnten nicht erstellt werden.", e))
         st.stop()
 
 
@@ -473,11 +489,26 @@ else:
         )
 
         if bg_notify_is_send_mode and not bg_notify_smtp_host:
-            st.warning("SMTP-Konfiguration fehlt. Bitte `mse_smtp_mail_send` in den Secrets prüfen.")
+            st.warning(
+                friendly_config_issue(
+                    "Das direkte Senden ist aktuell nicht eingerichtet.",
+                    "Bitte `mse_smtp_mail_send` in den Secrets prüfen.",
+                )
+            )
         elif bg_notify_is_send_mode and not bg_notify_imap_host:
-            st.warning("IMAP-Konfiguration für die Sent-Kopie fehlt. Bitte `mse_imap_mail_drafts` in den Secrets prüfen.")
+            st.warning(
+                friendly_config_issue(
+                    "Die Sent-Kopie ist aktuell nicht eingerichtet.",
+                    "Bitte `mse_imap_mail_drafts` in den Secrets prüfen.",
+                )
+            )
         elif (not bg_notify_is_send_mode) and not bg_notify_imap_host:
-            st.warning("IMAP-Draft-Konfiguration fehlt. Bitte `mse_imap_mail_drafts` in den Secrets prüfen.")
+            st.warning(
+                friendly_config_issue(
+                    "Das Speichern von Entwürfen ist aktuell nicht eingerichtet.",
+                    "Bitte `mse_imap_mail_drafts` in den Secrets prüfen.",
+                )
+            )
 
         bg_notify_expected = f"{_BG_CONFIRM_WORD_SEND} {n_badge_notifications}"
         bg_notify_confirmed = True
@@ -570,7 +601,14 @@ else:
                     "skipped": skipped,
                 }
             except Exception as exc:
-                st.error(str(exc))
+                st.error(
+                    friendly_with_technical_hint(
+                        "Die Benachrichtigungs-E-Mails konnten nicht gesendet werden."
+                        if bg_notify_is_send_mode
+                        else "Die Benachrichtigungs-Entwürfe konnten nicht erstellt werden.",
+                        exc,
+                    )
+                )
 
     bg_notify_result = st.session_state.get("bg_notify_result")
     if bg_notify_result is not None:
@@ -736,11 +774,26 @@ with st.expander("Badge-Mails speichern oder senden", expanded=False):
         bg_confirmed = bg_confirm.strip() == bg_expected
 
         if bg_is_send_mode and not bg_smtp_host:
-            st.warning("SMTP-Konfiguration fehlt. Bitte `mse_smtp_mail_send` in den Secrets prüfen.")
+            st.warning(
+                friendly_config_issue(
+                    "Das direkte Senden ist aktuell nicht eingerichtet.",
+                    "Bitte `mse_smtp_mail_send` in den Secrets prüfen.",
+                )
+            )
         elif bg_is_send_mode and not bg_imap_host:
-            st.warning("IMAP-Konfiguration für die Sent-Kopie fehlt. Bitte `mse_imap_mail_drafts` in den Secrets prüfen.")
+            st.warning(
+                friendly_config_issue(
+                    "Die Sent-Kopie ist aktuell nicht eingerichtet.",
+                    "Bitte `mse_imap_mail_drafts` in den Secrets prüfen.",
+                )
+            )
         elif (not bg_is_send_mode) and not bg_imap_host:
-            st.warning("IMAP-Draft-Konfiguration fehlt. Bitte `mse_imap_mail_drafts` in den Secrets prüfen.")
+            st.warning(
+                friendly_config_issue(
+                    "Das Speichern von Entwürfen ist aktuell nicht eingerichtet.",
+                    "Bitte `mse_imap_mail_drafts` in den Secrets prüfen.",
+                )
+            )
 
         bg_ready = (
             bg_confirmed
@@ -827,7 +880,14 @@ with st.expander("Badge-Mails speichern oder senden", expanded=False):
                     "skipped": skipped,
                 }
             except Exception as exc:
-                st.error(str(exc))
+                st.error(
+                    friendly_with_technical_hint(
+                        "Die Badge-E-Mails konnten nicht gesendet werden."
+                        if bg_is_send_mode
+                        else "Die Badge-Entwürfe konnten nicht erstellt werden.",
+                        exc,
+                    )
+                )
 
         bg_result = st.session_state.get("bg_draft_result")
         if bg_result is not None:

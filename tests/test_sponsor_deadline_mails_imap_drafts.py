@@ -263,12 +263,14 @@ class CreateImapDraftsMockedTests(unittest.TestCase):
         results = create_imap_drafts([_make_mail()], _make_config())
         self.assertEqual(1, len(results))
         self.assertEqual("error", results[0].result)
+        self.assertIn("Entwurf", results[0].details)
 
     @patch("sponsor_deadline_mails.imap_drafts.imaplib.IMAP4_SSL")
     def test_connection_error_propagates(self, mock_ssl):
         mock_ssl.side_effect = OSError("Connection refused")
-        with self.assertRaises(OSError):
+        with self.assertRaises(RuntimeError) as ctx:
             create_imap_drafts([_make_mail()], _make_config())
+        self.assertIn("Mailserver", str(ctx.exception))
 
     @patch("sponsor_deadline_mails.imap_drafts.imaplib.IMAP4_SSL")
     def test_logout_called_even_after_append_error(self, mock_ssl):
@@ -320,6 +322,7 @@ class CreateImapDraftsMockedTests(unittest.TestCase):
         self.assertEqual(2, len(results))
         self.assertEqual("error", results[0].result)
         self.assertEqual("draft_created", results[1].result)
+        self.assertIn("Technischer Hinweis:", results[0].details)
 
     @patch("sponsor_deadline_mails.imap_drafts.imaplib.IMAP4_SSL")
     def test_server_response_decoded_on_success(self, mock_ssl):

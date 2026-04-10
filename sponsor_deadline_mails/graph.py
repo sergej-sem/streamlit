@@ -8,6 +8,7 @@ import pandas as pd
 import requests
 
 from .core import GeneratedMail
+from shared.mail_errors import friendly_with_technical_hint
 
 
 GRAPH_SCOPE = ["https://graph.microsoft.com/.default"]
@@ -50,7 +51,10 @@ def _get_access_token(config: GraphDraftConfig) -> str:
     if token:
         return token
     raise RuntimeError(
-        f"Graph-Token konnte nicht abgerufen werden: {result.get('error')} - {result.get('error_description')}"
+        friendly_with_technical_hint(
+            "Die Anmeldung an Microsoft Graph ist fehlgeschlagen.",
+            f"{result.get('error')} - {result.get('error_description')}",
+        )
     )
 
 
@@ -77,7 +81,7 @@ def create_graph_drafts(
     config: GraphDraftConfig,
 ) -> list[GraphDraftRecord]:
     if not config.mailbox_user.strip():
-        raise ValueError("mailbox_user darf nicht leer sein")
+        raise ValueError("Das Microsoft-365-Postfach darf nicht leer sein.")
 
     token = _get_access_token(config)
     mailbox = quote(config.mailbox_user.strip(), safe="@._-")
@@ -128,7 +132,10 @@ def create_graph_drafts(
                     subject=mail.subject,
                     mailbox_user=config.mailbox_user,
                     result="error",
-                    details=str(exc),
+                    details=friendly_with_technical_hint(
+                        "Der Entwurf konnte nicht in Microsoft 365 erstellt werden.",
+                        exc,
+                    ),
                     message_id="",
                     web_link="",
                 )
