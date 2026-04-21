@@ -135,7 +135,7 @@ def _render_pdf_ready_block(
         examples = [str(name or "").strip() for name in shrunk_company_examples if str(name or "").strip()]
         examples_text = "\n".join(f"- `{name}`" for name in examples)
         examples_prefix = "Beispiel:" if len(examples) == 1 else "Beispiele:"
-        message = f"{shrunk_company_count} {label} {verb} in der PDF wegen ihrer Länge stark verkleinert werden."
+        message = f"{shrunk_company_count} {label} {verb} in der PDF wegen ihrer Länge verkleinert werden."
         if examples_text:
             message += f"\n\n{examples_prefix}\n{examples_text}"
         hint_slot.info(message)

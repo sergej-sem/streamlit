@@ -26,7 +26,7 @@ class CollectShrunkCompanyNamesTests(unittest.TestCase):
     def setUp(self) -> None:
         self.font_dir = Path(__file__).resolve().parents[1] / "fonts"
 
-    def test_returns_empty_when_no_company_hits_min_size(self) -> None:
+    def test_returns_empty_when_no_company_is_reduced(self) -> None:
         df = pd.DataFrame(
             [
                 {"Unternehmensname": "Acme GmbH", "Jobbezeichnung": "C-Level"},
@@ -52,13 +52,31 @@ class CollectShrunkCompanyNamesTests(unittest.TestCase):
 
         def fake_fit_text(txt, font, base, max_width, min_size=MIN_ROW_FONT_SIZE):
             if txt == "Lange Firma GmbH":
-                return txt, MIN_ROW_FONT_SIZE
+                return txt, ROW_FONT_SIZE - 0.5
             return txt, ROW_FONT_SIZE
 
         with patch("teilnehmerliste_generator.pdf_render.fit_text", side_effect=fake_fit_text):
             result = collect_shrunk_company_names(df, self.font_dir)
 
         self.assertEqual(["Lange Firma GmbH"], result)
+
+    def test_returns_company_names_as_soon_as_font_size_is_below_default(self) -> None:
+        df = pd.DataFrame(
+            [
+                {"Unternehmensname": "Leicht verkleinerte GmbH", "Jobbezeichnung": "C-Level"},
+                {"Unternehmensname": "Normal AG", "Jobbezeichnung": "Fachbereich"},
+            ]
+        )
+
+        def fake_fit_text(txt, font, base, max_width, min_size=MIN_ROW_FONT_SIZE):
+            if txt == "Leicht verkleinerte GmbH":
+                return txt, ROW_FONT_SIZE - 0.25
+            return txt, ROW_FONT_SIZE
+
+        with patch("teilnehmerliste_generator.pdf_render.fit_text", side_effect=fake_fit_text):
+            result = collect_shrunk_company_names(df, self.font_dir)
+
+        self.assertEqual(["Leicht verkleinerte GmbH"], result)
 
     def test_respects_different_company_widths_on_first_and_follow_up_pages(self) -> None:
         rows = [{"Unternehmensname": "Erste Seite GmbH", "Jobbezeichnung": "C-Level"}]
@@ -72,10 +90,10 @@ class CollectShrunkCompanyNamesTests(unittest.TestCase):
 
         def fake_fit_text(txt, font, base, max_width, min_size=MIN_ROW_FONT_SIZE):
             if txt == "Erste Seite GmbH":
-                size = MIN_ROW_FONT_SIZE if max_width == page1_width else ROW_FONT_SIZE
+                size = ROW_FONT_SIZE - 0.25 if max_width == page1_width else ROW_FONT_SIZE
                 return txt, size
             if txt == "Zweite Seite GmbH":
-                size = MIN_ROW_FONT_SIZE if max_width == page2_width else ROW_FONT_SIZE
+                size = ROW_FONT_SIZE - 0.25 if max_width == page2_width else ROW_FONT_SIZE
                 return txt, size
             return txt, ROW_FONT_SIZE
 

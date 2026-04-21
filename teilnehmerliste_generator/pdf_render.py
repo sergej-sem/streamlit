@@ -149,7 +149,7 @@ def _clean_company_name(value: object) -> str:
 
 def collect_shrunk_company_names(df: pd.DataFrame, font_dir: Path) -> list[str]:
     """
-    Return unique company names that hit the minimum font size in the final PDF layout.
+    Return unique company names whose font size is reduced in the final PDF layout.
     The order follows the final PDF order.
     """
     myriad_reg, _myriad_bold, _plex_reg, _plex_bold = try_register_fonts(font_dir)
@@ -172,7 +172,7 @@ def collect_shrunk_company_names(df: pd.DataFrame, font_dir: Path) -> list[str]:
                 ROW_FONT_SIZE,
                 maxw_company,
             )
-            if company_size > MIN_ROW_FONT_SIZE:
+            if company_size >= ROW_FONT_SIZE:
                 continue
             if company_name in seen:
                 continue
