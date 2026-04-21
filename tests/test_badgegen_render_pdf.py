@@ -366,6 +366,27 @@ class RenderBadgesPdfBytesTests(unittest.TestCase):
             **defaults,
         )
 
+    def _capture_company_render_order(self, rows, *, template_by_category=None) -> list[str]:
+        original_draw = render_pdf_module._draw_centered_lines_in_box
+        company_box = _mm_box_to_points(TEXT_BOXES_MM["company"])
+        company_order: list[str] = []
+
+        def tracking_draw(*args, **kwargs):
+            box = (args[4], args[5], args[6], args[7])
+            if box == company_box:
+                company_order.append(" ".join(args[1]).strip())
+            return original_draw(*args, **kwargs)
+
+        with patch("badgegen.render_pdf._draw_centered_lines_in_box", side_effect=tracking_draw):
+            render_badges_pdf_bytes(
+                rows=rows,
+                template_by_category=template_by_category or self._tpl_map,
+                uppercase_names=False,
+                uppercase_company=False,
+            )
+
+        return company_order
+
     def _make_row(self, firstname, lastname, jobtitle, company, cat="TN", id_="42"):
         return {
             "id": id_,
@@ -423,6 +444,62 @@ class RenderBadgesPdfBytesTests(unittest.TestCase):
         row = self._make_row("Marcus", "Schaper", "CEO", "SBG")
         result = self._render([row], uppercase_names=True, uppercase_company=True)
         self.assertTrue(result.startswith(b"%PDF"))
+
+    def test_render_sorts_rows_by_category_then_company(self):
+        rows = [
+            self._make_row("Tina", "Team", "Crew", "Zulu Team", cat="Team", id_="1"),
+            self._make_row("Clara", "TN", "Attendee", "Caesar GmbH", cat="TN", id_="2"),
+            self._make_row("Ben", "Sponsor", "Partner", "Beta Sponsor", cat="Sponsor", id_="3"),
+            self._make_row("Anna", "TN", "Attendee", "Anton GmbH", cat="TN", id_="4"),
+            self._make_row("Vera", "VIP", "Guest", "Delta VIP", cat="VIP/REF", id_="5"),
+            self._make_row("Alex", "Sponsor", "Partner", "Alpha Sponsor", cat="Sponsor", id_="6"),
+            self._make_row("Beo", "Ops", "Support", "Ops GmbH", cat="BEO", id_="7"),
+        ]
+
+        self.assertEqual(
+            [
+                "Anton GmbH",
+                "Caesar GmbH",
+                "Delta VIP",
+                "Alpha Sponsor",
+                "Beta Sponsor",
+                "Ops GmbH",
+                "Zulu Team",
+            ],
+            self._capture_company_render_order(rows),
+        )
+
+    def test_render_sorts_blank_companies_last_within_category(self):
+        rows = [
+            self._make_row("Chris", "TN", "Attendee", None, cat="TN", id_="1"),
+            self._make_row("Anna", "TN", "Attendee", "Anton GmbH", cat="TN", id_="2"),
+            self._make_row("Berta", "TN", "Attendee", "", cat="TN", id_="3"),
+            self._make_row("Dora", "TN", "Attendee", "Berta GmbH", cat="TN", id_="4"),
+        ]
+
+        self.assertEqual(
+            ["Anton GmbH", "Berta GmbH", "", ""],
+            self._capture_company_render_order(rows),
+        )
+
+    def test_render_keeps_unknown_categories_after_known_by_first_seen_group(self):
+        rows = [
+            self._make_row("Anna", "Known", "Attendee", "Known TN", cat="TN", id_="1"),
+            self._make_row("Max", "Media", "Press", "Zulu Media", cat="Media", id_="2"),
+            self._make_row("Gina", "Gast", "Guest", "Anton Gast", cat="Gast", id_="3"),
+            self._make_row("Mia", "Media", "Press", "Alpha Media", cat="Media", id_="4"),
+            self._make_row("Gerd", "Gast", "Guest", "Berta Gast", cat="Gast", id_="5"),
+        ]
+        template_by_category = {
+            **self._tpl_map,
+            "Media": self._tpl_path,
+            "Gast": self._tpl_path,
+        }
+
+        self.assertEqual(
+            ["Known TN", "Alpha Media", "Zulu Media", "Anton Gast", "Berta Gast"],
+            self._capture_company_render_order(rows, template_by_category=template_by_category),
+        )
 
     # --- Leere Felder: kein Absturz ---
 

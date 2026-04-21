@@ -56,7 +56,7 @@ from badgegen.notification_settings import (
     load_badge_notification_settings,
     save_badge_notification_settings,
 )
-from streamlit_ui import render_email_selectbox, render_page_title
+from streamlit_ui import render_email_selectbox, render_page_title, render_section_title
 
 st.set_page_config(page_title="Badge Generator (HubSpot)", layout="wide")
 render_page_title("Badge Generator (HubSpot)")
@@ -440,7 +440,7 @@ n_with_email = int((email_col != "").sum())
 n_without_email = len(df_out) - n_with_email
 n_badge_notifications = len(df_out)
 
-st.subheader("Badge-Benachrichtigung per E-Mail")
+render_section_title("Badge-Status senden (Empfänger: Eventmanager)")
 if not st.session_state.get("badges_pdf_downloaded"):
     st.info(
         "Nach dem Klick auf `PDF erstellen` stehen hier E-Mail-Aktionen für die "

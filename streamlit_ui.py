@@ -33,6 +33,10 @@ def render_page_title(title: str) -> None:
     st.markdown(page_title_html(title), unsafe_allow_html=True)
 
 
+def render_section_title(title: str) -> None:
+    st.markdown(page_title_html(title), unsafe_allow_html=True)
+
+
 def render_email_selectbox(
     label: str,
     *,

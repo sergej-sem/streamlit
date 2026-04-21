@@ -53,7 +53,7 @@ from shared.smtp_sender import (
     DEFAULT_SEND_DELAY_MIN_SECONDS,
     SmtpSendConfig,
 )
-from streamlit_ui import render_email_selectbox
+from streamlit_ui import render_email_selectbox, render_page_title, render_section_title
 
 st.set_page_config(page_title="Serienmailing", layout="wide")
 
@@ -141,7 +141,7 @@ def _load_hubspot_contacts(list_id: str) -> pd.DataFrame:
 
 _init_state()
 
-st.title("Serienmailing")
+render_page_title("Serienmailing")
 
 imap_host, imap_port, imap_folder, imap_sent_folder, imap_ssl = _load_imap_defaults()
 smtp_host, smtp_port, smtp_use_ssl, smtp_use_starttls, smtp_timeout = _load_smtp_defaults()
@@ -159,7 +159,7 @@ with col_cred_b:
 
 st.divider()
 
-st.subheader("Kontakte")
+render_section_title("Kontakte")
 
 tab_excel, tab_hs, tab_manual = st.tabs(["Excel / CSV", "HubSpot", "Manuell"])
 
@@ -243,7 +243,7 @@ else:
 
 st.divider()
 
-st.subheader("E-Mail")
+render_section_title("E-Mail")
 
 subject_tpl = st.text_input(
     "Betreff",
@@ -304,7 +304,7 @@ elif preview_ready(
 
 st.divider()
 
-st.subheader("Versand")
+render_section_title("Versand")
 
 mail_mode = st.radio(
     "Modus",

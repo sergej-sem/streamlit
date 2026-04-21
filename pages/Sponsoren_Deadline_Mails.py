@@ -50,7 +50,7 @@ from sponsor_deadline_mails.summary_state import (
     make_summary_callback,
     selected_mail_numbers as get_selected_mail_numbers,
 )
-from streamlit_ui import render_email_selectbox, render_page_title
+from streamlit_ui import render_email_selectbox, render_page_title, render_section_title
 
 st.set_page_config(page_title="Deadline-E-Mails für Sponsoren", layout="wide")
 
@@ -305,7 +305,7 @@ if not result.mails:
 ensure_summary_state(st.session_state, result)
 summary_df = st.session_state["sdm_summary_df"]
 
-st.subheader("Zusammenfassung")
+render_section_title("Zusammenfassung")
 _frag_summary()
 summary_df = st.session_state["sdm_summary_df"]
 selected_mail_numbers = get_selected_mail_numbers(summary_df)
@@ -323,7 +323,7 @@ if default_preview_mail_number not in mail_by_number and preview_options:
     st.session_state["sdm_preview_mail_number"] = preview_options[0]
 
 with preview_col:
-    st.subheader("Vorschau")
+    render_section_title("Vorschau")
     preview_mail_number = st.selectbox(
         "Sponsor auswählen",
         options=preview_options,
@@ -337,11 +337,11 @@ with preview_col:
     st.markdown(f"**Kopie:** `{preview_mail.cc_email or '-'}`")
 
 with details_col:
-    st.subheader("Vorschau der E-Mail")
+    render_section_title("Vorschau der E-Mail")
     components.html(preview_mail.html_body, height=780, scrolling=True)
 
 st.divider()
-st.subheader("Versand")
+render_section_title("Versand")
 
 selected_mails = [
     mail_by_number[mail_number]
@@ -514,7 +514,7 @@ mail_run_context = st.session_state.get("sdm_mail_run_context")
 mail_run_error = st.session_state.get("sdm_mail_run_error")
 if mail_log_records or mail_run_error:
     st.divider()
-    st.subheader("Ergebnis")
+    render_section_title("Ergebnis")
 
     mode_label = (mail_run_context or {}).get("Modus", "DRAFTS")
     success_status = "sent" if mode_label == "SENDEN" else "draft_created"

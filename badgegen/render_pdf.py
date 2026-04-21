@@ -6,6 +6,7 @@ import unicodedata
 from io import BytesIO
 from typing import Dict, Any, List, Tuple
 
+from badgegen.category import ALLOWED_CATEGORIES
 from reportlab.lib import colors
 from reportlab.lib.units import mm
 from reportlab.lib.utils import ImageReader
@@ -142,6 +143,33 @@ def _normalize_badge_text(value: str | None) -> str:
     # NFC folds decomposed sequences like "O\u0308" into precomposed glyphs like "Ö".
     # That keeps umlauts stable across local Windows fonts and Linux/Cloud fallbacks.
     return unicodedata.normalize("NFC", text)
+
+
+def _company_sort_key(value: str | None) -> tuple[int, str]:
+    normalized = _normalize_badge_text(value)
+    if not normalized:
+        return 1, ""
+    return 0, normalized.casefold()
+
+
+def _sorted_badge_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    known_category_order = {category: index for index, category in enumerate(ALLOWED_CATEGORIES)}
+    unknown_category_order: dict[str, int] = {}
+
+    for row in rows:
+        category = (row.get("kategorie") or "").strip()
+        if category in known_category_order or category in unknown_category_order:
+            continue
+        unknown_category_order[category] = len(unknown_category_order)
+
+    def _sort_key(row: Dict[str, Any]) -> tuple[int, int, tuple[int, str]]:
+        category = (row.get("kategorie") or "").strip()
+        known_rank = known_category_order.get(category)
+        if known_rank is not None:
+            return 0, known_rank, _company_sort_key(row.get("company"))
+        return 1, unknown_category_order[category], _company_sort_key(row.get("company"))
+
+    return sorted(rows, key=_sort_key)
 
 
 _FONT_HEAVY, _FONT_REGULAR = _register_badge_fonts()
@@ -388,7 +416,7 @@ def render_badges_pdf_bytes(
     box_job     = _mm_box_to_points(TEXT_BOXES_MM["jobtitle"])
     box_company = _mm_box_to_points(TEXT_BOXES_MM["company"])
 
-    for r in rows:
+    for r in _sorted_badge_rows(rows):
         cat = (r.get("kategorie") or "").strip()
         if not cat:
             raise ValueError("Kategorie fehlt.")

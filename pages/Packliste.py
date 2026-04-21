@@ -112,7 +112,7 @@ from packliste.storage import (
     save_df as _save_df_impl,
     save_last_active_path as _save_last_active_path_impl,
 )
-from streamlit_ui import apply_page_title_style, page_title_html
+from streamlit_ui import apply_page_title_style, page_title_html, render_section_title
 
 st.set_page_config(page_title="Packliste", layout="wide")
 
@@ -427,7 +427,7 @@ def _render_overview_stats_df(
     value_label: str,
     note: str | None = None,
 ) -> None:
-    st.subheader(title)
+    render_section_title(title)
     if note:
         st.caption(note)
     if stats.empty:
@@ -807,7 +807,7 @@ def _frag_packen() -> None:
     }
 
     # ── Jetzt reinigen und packen ──────────────────────────────────────────────
-    st.subheader("Jetzt reinigen und packen")
+    render_section_title("Jetzt reinigen und packen")
     cr     = ["Bereich", "Gegenstand", "Menge", "Kategorie", "Verpackt"]
     bk_r   = f"b_rein_{ver}"
     view_r = df.loc[df["Reinigung"].astype(bool), cr].sort_values("Bereich")
@@ -840,7 +840,7 @@ def _frag_packen() -> None:
     st.divider()
 
     # ── Jetzt packen ──────────────────────────────────────────────────────────
-    st.subheader("Jetzt packen – Verbrauchsgegenstände")
+    render_section_title("Jetzt packen – Verbrauchsgegenstände")
     cn     = ["Bereich", "Gegenstand", "Menge", "Kategorie", "Verpackt"]
     bk_n   = f"b_nach_{ver}"
     view_n = df.loc[df["Nachfüllen"].astype(bool), cn].sort_values("Bereich")
@@ -873,7 +873,7 @@ def _frag_packen() -> None:
     st.divider()
 
     # ── Kurz vor Event packen ──────────────────────────────────────────────────
-    st.subheader("Kurz vor Event packen")
+    render_section_title("Kurz vor Event packen")
     ce     = ["Bereich", "Gegenstand", "Menge", "Kategorie", "Verpackt"]
     bk_e   = f"b_event_{ver}"
     view_e = df.loc[df["kurz vor Event packen"].astype(bool), ce].sort_values("Bereich")
@@ -946,7 +946,7 @@ def _frag_ersetzen() -> None:
     flush_full_rerun_after_editor_commit(st.session_state, rerun=st.rerun)
     ver      = st.session_state["pl_version"]
     df       = st.session_state["pl_df"]
-    st.subheader("Gebrauchsgegenstände")
+    render_section_title("Gebrauchsgegenstände")
     st.caption("In die Notizen das Problem reinschreiben.")
     cols_e   = ["Bereich", "Gegenstand", "Notizen"]
     bk_ers   = f"b_ers_{ver}"

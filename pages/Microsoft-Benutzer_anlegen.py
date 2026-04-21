@@ -23,7 +23,7 @@ from shared.config import (
     is_live_user_creation_enabled,
     load_graph_bulk_user_settings,
 )
-from streamlit_ui import render_page_title
+from streamlit_ui import render_page_title, render_section_title
 
 
 # ============================================================
@@ -117,11 +117,11 @@ if not graph_cfg:
 controls_col, main_col = st.columns([1, 2], gap="large")
 
 with controls_col:
-    st.subheader("1) Datei auswählen")
+    render_section_title("1) Datei auswählen")
     uploaded = st.file_uploader("CSV oder XLSX hochladen", type=["csv", "xlsx"])
 
     st.divider()
-    st.subheader("2) Einstellungen")
+    render_section_title("2) Einstellungen")
 
     domain = st.text_input("Login-Domain", value=DEFAULT_DOMAIN, help="Wird für den Login-Namen (UPN) verwendet.")
     password = st.text_input(
@@ -140,7 +140,7 @@ with controls_col:
     )
 
     st.divider()
-    st.subheader("3) Test oder Anlegen")
+    render_section_title("3) Test oder Anlegen")
 
     mode_options = ["Testlauf (es wird nichts angelegt)"]
     if enable_live_user_creation:
@@ -176,7 +176,7 @@ with main_col:
         st.error(f"Datei konnte nicht gelesen werden: {exc}")
         st.stop()
 
-    st.subheader("Vorschau")
+    render_section_title("Vorschau")
     st.write(f"Quelle: **{source}** · Zeilen: **{len(df)}** · Spalten: **{len(df.columns)}**")
     st.dataframe(df.head(25), use_container_width=True, hide_index=True)
 
@@ -209,7 +209,7 @@ with main_col:
         upn_exists=lambda upn: upn_exists_cached(upn, token),
     )
 
-    st.subheader("Plan (wer wird angelegt?)")
+    render_section_title("Plan (wer wird angelegt?)")
 
     filter_opt = st.selectbox(
         "Anzeige filtern",
@@ -258,7 +258,7 @@ with main_col:
             )
 
     st.divider()
-    st.subheader("Ausführen")
+    render_section_title("Ausführen")
 
     allow_live = (
         enable_live_user_creation
@@ -346,7 +346,7 @@ with main_col:
             f"TESTLAUF: **{int(result_counts.get('TESTLAUF', 0))}** · "
             f"ÜBERSPRUNGEN: **{int(result_counts.get('ÜBERSPRUNGEN', 0))}**"
         )
-        st.subheader("Protokoll")
+        render_section_title("Protokoll")
         st.dataframe(log_df, use_container_width=True, hide_index=True)
 
         log_csv = log_df.to_csv(index=False).encode("utf-8")
