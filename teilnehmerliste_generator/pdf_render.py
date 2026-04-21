@@ -59,6 +59,7 @@ RIGHT_MARGIN = 20
 TEMPLATE_IMAGE_MAX_WIDTH = 1200
 TEMPLATE_IMAGE_JPEG_QUALITY = 80
 LANCZOS = getattr(Image, "Resampling", Image).LANCZOS
+MIN_ROW_FONT_SIZE = 11.0
 
 
 def y_from_top(y_top: float) -> float:
@@ -72,7 +73,8 @@ def try_register_fonts(font_dir: Path) -> Tuple[str, str, str, str]:
     def reg(name: str, filename: str, fallback: str) -> str:
         fpath = font_dir / filename
         if fpath.exists():
-            pdfmetrics.registerFont(TTFont(name, str(fpath)))
+            if name not in pdfmetrics.getRegisteredFontNames():
+                pdfmetrics.registerFont(TTFont(name, str(fpath)))
             return name
         return fallback
 
@@ -87,7 +89,7 @@ def string_width(txt: str, font_name: str, font_size: float) -> float:
     return pdfmetrics.stringWidth(txt, font_name, font_size)
 
 
-def fit_text(txt: str, font_name: str, base_size: float, max_width: float, min_size: float = 11.0):
+def fit_text(txt: str, font_name: str, base_size: float, max_width: float, min_size: float = MIN_ROW_FONT_SIZE):
     """
     Fit by shrinking, then truncating with '…'
     """
@@ -126,6 +128,59 @@ def _chunk_rows(rows: list) -> list:
     for i in range(0, len(rest), CAP_NEXT):
         pages.append(rest[i:i + CAP_NEXT])
     return pages
+
+
+def _company_max_width_for_page(page_idx: int) -> float:
+    if page_idx == 0:
+        return (P1_JOB_X - P1_COMPANY_X) - COLUMN_GAP_PADDING
+    return (P2_JOB_X - P2_COMPANY_X) - COLUMN_GAP_PADDING
+
+
+def _clean_company_name(value: object) -> str:
+    if value is None:
+        return ""
+    try:
+        if pd.isna(value):
+            return ""
+    except Exception:
+        pass
+    return str(value).strip()
+
+
+def collect_shrunk_company_names(df: pd.DataFrame, font_dir: Path) -> list[str]:
+    """
+    Return unique company names that hit the minimum font size in the final PDF layout.
+    The order follows the final PDF order.
+    """
+    myriad_reg, _myriad_bold, _plex_reg, _plex_bold = try_register_fonts(font_dir)
+
+    rows = df[["Unternehmensname", "Jobbezeichnung"]].values.tolist()
+    pages = _chunk_rows(rows)
+    shrunk_names: list[str] = []
+    seen: set[str] = set()
+
+    for page_idx, page_rows in enumerate(pages):
+        maxw_company = _company_max_width_for_page(page_idx)
+        for company, _job in page_rows:
+            company_name = _clean_company_name(company)
+            if not company_name:
+                continue
+
+            _company_txt, company_size = fit_text(
+                company_name,
+                myriad_reg,
+                ROW_FONT_SIZE,
+                maxw_company,
+            )
+            if company_size > MIN_ROW_FONT_SIZE:
+                continue
+            if company_name in seen:
+                continue
+
+            seen.add(company_name)
+            shrunk_names.append(company_name)
+
+    return shrunk_names
 
 
 def build_template_image_reader(
@@ -193,8 +248,6 @@ def generate_pdf_bytes(
     total_pages = _calc_total_pages(n)
     pages = _chunk_rows(rows)
 
-    maxw_company_p1 = (P1_JOB_X - P1_COMPANY_X) - COLUMN_GAP_PADDING
-    maxw_company_p2 = (P2_JOB_X - P2_COMPANY_X) - COLUMN_GAP_PADDING
     maxw_job = (PAGE_W - RIGHT_MARGIN) - P2_JOB_X
 
     prev_use_a85 = getattr(rl_config, "useA85", 1)
@@ -239,14 +292,13 @@ def generate_pdf_bytes(
                 first_y_company = P1_FIRST_Y_COMPANY_TOP
                 first_y_job = P1_FIRST_Y_JOB_TOP
                 step = LINE_STEP
-                maxw_company = maxw_company_p1
             else:
                 base_x_company = P2_COMPANY_X
                 base_x_job = P2_JOB_X
                 first_y_company = P2_FIRST_Y_COMPANY_TOP
                 first_y_job = P2_FIRST_Y_JOB_TOP
                 step = LINE_STEP_P2
-                maxw_company = maxw_company_p2
+            maxw_company = _company_max_width_for_page(page_idx)
 
             for i, (company, job) in enumerate(page_rows):
                 y_company = y_from_top(first_y_company + i * step)

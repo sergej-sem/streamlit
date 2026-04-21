@@ -16,7 +16,7 @@ from teilnehmerliste_generator.hubspot_client import (
 )
 from teilnehmerliste_generator.output_naming import build_pdf_filename
 from teilnehmerliste_generator.transform import build_teilnehmerliste
-from teilnehmerliste_generator.pdf_render import generate_pdf_bytes
+from teilnehmerliste_generator.pdf_render import collect_shrunk_company_names, generate_pdf_bytes
 from streamlit_ui import render_page_title
 
 
@@ -108,6 +108,48 @@ def get_lists_map_autorefresh(ttl_seconds: int = LISTS_TTL_SECONDS) -> dict[str,
     return st.session_state["lists_map"]
 
 
+def _reset_pdf_output_state() -> None:
+    st.session_state.pdf_ready = False
+    st.session_state.pdf_bytes = None
+    st.session_state.pdf_row_count = 0
+    st.session_state.pdf_shrunk_company_count = 0
+    st.session_state.pdf_shrunk_company_examples = ()
+
+
+def _render_pdf_ready_block(
+    *,
+    status_slot,
+    hint_slot,
+    action_slot,
+    pdf_bytes: bytes,
+    pdf_filename: str,
+    row_count: int,
+    shrunk_company_count: int,
+    shrunk_company_examples: tuple[str, ...],
+) -> None:
+    status_slot.success(f"Fertig: {row_count} Zeilen (max. 2 pro Firma).")
+
+    if shrunk_company_count:
+        label = "Firmenname" if shrunk_company_count == 1 else "Firmennamen"
+        verb = "musste" if shrunk_company_count == 1 else "mussten"
+        examples = [str(name or "").strip() for name in shrunk_company_examples if str(name or "").strip()]
+        examples_text = "\n".join(f"- `{name}`" for name in examples)
+        examples_prefix = "Beispiel:" if len(examples) == 1 else "Beispiele:"
+        message = f"{shrunk_company_count} {label} {verb} in der PDF wegen ihrer Länge stark verkleinert werden."
+        if examples_text:
+            message += f"\n\n{examples_prefix}\n{examples_text}"
+        hint_slot.info(message)
+    else:
+        hint_slot.empty()
+
+    action_slot.download_button(
+        "Nochmal herunterladen",
+        data=pdf_bytes,
+        file_name=pdf_filename,
+        mime="application/pdf",
+    )
+
+
 render_page_title("Teilnehmerliste Generator")
 
 # --- Sprache ---
@@ -181,6 +223,8 @@ for _key, _default in [
     ("pdf_ready", False),
     ("pdf_row_count", 0),
     ("pdf_filename", "Teilnehmerliste.pdf"),
+    ("pdf_shrunk_company_count", 0),
+    ("pdf_shrunk_company_examples", ()),
     ("last_pdf_key", None),
 ]:
     if _key not in st.session_state:
@@ -190,92 +234,97 @@ for _key, _default in [
 _current_pdf_key = (list_id, city_code, lang, encrypt, pdf_password)
 if st.session_state.last_pdf_key != _current_pdf_key:
     st.session_state.last_pdf_key = _current_pdf_key
-    st.session_state.pdf_ready = False
-    st.session_state.pdf_bytes = None
+    _reset_pdf_output_state()
 
-if not st.session_state.pdf_ready:
-    if st.button("PDF erstellen", type="primary"):
-        with st.spinner("Mitglieder laden..."):
-            ids = get_list_members(list_id)
+with st.container():
+    status_slot = st.empty()
+    hint_slot = st.empty()
+    action_slot = st.empty()
 
-        if not ids:
-            st.warning("Diese Liste enthält 0 Kontakte.")
-            st.stop()
+if not st.session_state.pdf_ready and action_slot.button("PDF erstellen", type="primary"):
+    with st.spinner("Mitglieder laden..."):
+        ids = get_list_members(list_id)
 
-        with st.spinner("Kontakte laden (company, jobtitle)..."):
-            contacts = get_contacts_by_ids(ids, properties=["company", "jobtitle"])
+    if not ids:
+        st.warning("Diese Liste enthält 0 Kontakte.")
+        st.stop()
 
-        df_raw = pd.DataFrame([c.get("properties", {}) for c in contacts])
+    with st.spinner("Kontakte laden (company, jobtitle)..."):
+        contacts = get_contacts_by_ids(ids, properties=["company", "jobtitle"])
 
-        if df_raw.empty:
-            st.warning("Keine Kontakteigenschaften erhalten.")
-            st.stop()
+    df_raw = pd.DataFrame([c.get("properties", {}) for c in contacts])
 
-        with st.spinner("Regeln anwenden..."):
-            df_out = build_teilnehmerliste(df_raw, lang=lang)
+    if df_raw.empty:
+        st.warning("Keine Kontakteigenschaften erhalten.")
+        st.stop()
 
-        if df_out.empty:
-            st.warning("Keine Einträge nach Transformation – möglicherweise sind alle Firmenfelder leer.")
-            st.stop()
+    with st.spinner("Regeln anwenden..."):
+        df_out = build_teilnehmerliste(df_raw, lang=lang)
 
-        with st.spinner("PDF rendern..."):
-            pdf_bytes = generate_pdf_bytes(
-                df=df_out,
-                template_p1=TEMPLATE_P1,
-                template_p2=TEMPLATE_P2,
-                font_dir=FONT_DIR,
-                lang=lang,
-            )
+    if df_out.empty:
+        st.warning("Keine Einträge nach Transformation – möglicherweise sind alle Firmenfelder leer.")
+        st.stop()
 
-        with st.spinner("PDF finalisieren..."):
-            pdf_bytes = finalize_pdf_bytes(
-                pdf_bytes,
-                password=pdf_password if encrypt else "",
-            )
+    shrunk_company_names = collect_shrunk_company_names(df_out, font_dir=FONT_DIR)
 
-        st.session_state.pdf_bytes = pdf_bytes
-        st.session_state.pdf_ready = True
-        st.session_state.pdf_row_count = len(df_out)
-        st.session_state.pdf_filename = pdf_filename
-
-        st.success(f"Fertig: {len(df_out)} Zeilen (max. 2 pro Firma).")
-
-        # Automatischer Download via JS (Blob URL über window.parent, da data:-URLs aus iframes geblockt werden)
-        b64 = base64.b64encode(pdf_bytes).decode()
-        components.html(
-            f"""<script>
-              (function() {{
-                var b64 = '{b64}';
-                var byteChars = atob(b64);
-                var byteArray = new Uint8Array(byteChars.length);
-                for (var i = 0; i < byteChars.length; i++) {{
-                  byteArray[i] = byteChars.charCodeAt(i);
-                }}
-                var blob = new Blob([byteArray], {{type: 'application/pdf'}});
-                var url = URL.createObjectURL(blob);
-                var a = window.parent.document.createElement('a');
-                a.href = url;
-                a.download = '{_pdf_filename_js}';
-                window.parent.document.body.appendChild(a);
-                a.click();
-                window.parent.document.body.removeChild(a);
-                setTimeout(function() {{ URL.revokeObjectURL(url); }}, 2000);
-              }})();
-            </script>""",
-            height=0,
+    with st.spinner("PDF rendern..."):
+        pdf_bytes = generate_pdf_bytes(
+            df=df_out,
+            template_p1=TEMPLATE_P1,
+            template_p2=TEMPLATE_P2,
+            font_dir=FONT_DIR,
+            lang=lang,
         )
 
-        st.download_button(
-            "Nochmal herunterladen",
-            data=pdf_bytes,
-            file_name=pdf_filename,
-            mime="application/pdf",
+    with st.spinner("PDF finalisieren..."):
+        pdf_bytes = finalize_pdf_bytes(
+            pdf_bytes,
+            password=pdf_password if encrypt else "",
         )
-else:
-    st.success(f"Fertig: {st.session_state.pdf_row_count} Zeilen (max. 2 pro Firma).")
-    st.download_button(
-        "Nochmal herunterladen",
-        data=st.session_state.pdf_bytes,
-        file_name=pdf_filename,
-        mime="application/pdf",
+
+    st.session_state.pdf_bytes = pdf_bytes
+    st.session_state.pdf_ready = True
+    st.session_state.pdf_row_count = len(df_out)
+    st.session_state.pdf_filename = pdf_filename
+    st.session_state.pdf_shrunk_company_count = len(shrunk_company_names)
+    st.session_state.pdf_shrunk_company_examples = tuple(shrunk_company_names[:5])
+
+    # Automatischer Download via JS (Blob URL über window.parent, da data:-URLs aus iframes geblockt werden)
+    b64 = base64.b64encode(pdf_bytes).decode()
+    components.html(
+        f"""<script>
+          (function() {{
+            var b64 = '{b64}';
+            var byteChars = atob(b64);
+            var byteArray = new Uint8Array(byteChars.length);
+            for (var i = 0; i < byteChars.length; i++) {{
+              byteArray[i] = byteChars.charCodeAt(i);
+            }}
+            var blob = new Blob([byteArray], {{type: 'application/pdf'}});
+            var url = URL.createObjectURL(blob);
+            var a = window.parent.document.createElement('a');
+            a.href = url;
+            a.download = '{_pdf_filename_js}';
+            window.parent.document.body.appendChild(a);
+            a.click();
+            window.parent.document.body.removeChild(a);
+            setTimeout(function() {{ URL.revokeObjectURL(url); }}, 2000);
+          }})();
+        </script>""",
+        height=0,
     )
+
+if st.session_state.pdf_ready:
+    _render_pdf_ready_block(
+        status_slot=status_slot,
+        hint_slot=hint_slot,
+        action_slot=action_slot,
+        pdf_bytes=st.session_state.pdf_bytes,
+        pdf_filename=st.session_state.pdf_filename,
+        row_count=st.session_state.pdf_row_count,
+        shrunk_company_count=st.session_state.pdf_shrunk_company_count,
+        shrunk_company_examples=st.session_state.pdf_shrunk_company_examples,
+    )
+else:
+    status_slot.empty()
+    hint_slot.empty()
