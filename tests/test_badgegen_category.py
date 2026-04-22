@@ -3,6 +3,7 @@ import unittest
 from badgegen.category import (
     ALLOWED_CATEGORIES,
     K_BEO,
+    K_HOSTESS,
     K_SPO,
     K_TEAM,
     K_TN,
@@ -63,6 +64,10 @@ class DeriveKategorieBasicTests(unittest.TestCase):
     # ── Team ──────────────────────────────────────────────────────────────────
     def test_team(self):
         self._check("26DOR_TEAM", K_TEAM)
+
+    # ── Hostess ───────────────────────────────────────────────────────────────
+    def test_hostess(self):
+        self._check("26DOR_HOSTESS", K_HOSTESS)
 
 
 class DeriveKategorieEdgeCaseTests(unittest.TestCase):
@@ -138,13 +143,13 @@ class DeriveKategorieOrderTests(unittest.TestCase):
 
 class AllowedCategoriesTests(unittest.TestCase):
     def test_all_categories_present(self):
-        for cat in [K_TN, K_VIP, K_SPO, K_BEO, K_TEAM]:
+        for cat in [K_TN, K_VIP, K_SPO, K_BEO, K_TEAM, K_HOSTESS]:
             self.assertIn(cat, ALLOWED_CATEGORIES)
 
     def test_derive_results_are_in_allowed_categories(self):
         cases = [
             "26DOR_TN", "26DOR_REF", "26DOR_SPO",
-            "26DOR_BEO", "26DOR_TEAM",
+            "26DOR_BEO", "26DOR_TEAM", "26DOR_HOSTESS",
         ]
         for h in cases:
             result = derive_kategorie_from_historie(h, TAG)

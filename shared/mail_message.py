@@ -8,6 +8,7 @@ from email.policy import SMTP
 from email.utils import formatdate, make_msgid
 
 from serienmailing.mail_builder import html_to_plain_text
+from shared.email_validation import is_valid_email_address, normalize_email_address
 
 _MIME_MAP = {
     "pdf": ("application", "pdf"),
@@ -74,10 +75,17 @@ def _normalize_address_header(value: str, *, allow_multiple: bool) -> str:
 
     addresses = email_utils.getaddresses([raw])
     formatted: list[str] = []
+    invalid: list[str] = []
     for display_name, addr in addresses:
-        normalized_addr = (addr or "").strip()
+        normalized_addr = normalize_email_address(addr)
         normalized_name = (display_name or "").strip()
         if not normalized_addr:
+            candidate = (addr or "").strip()
+            if candidate:
+                invalid.append(candidate)
+            continue
+        if not is_valid_email_address(normalized_addr):
+            invalid.append((addr or "").strip() or normalized_addr)
             continue
         formatted.append(
             email_utils.formataddr((normalized_name, normalized_addr))
@@ -85,8 +93,13 @@ def _normalize_address_header(value: str, *, allow_multiple: bool) -> str:
             else normalized_addr
         )
 
+    if invalid:
+        raise ValueError("Ungültige E-Mail-Adresse: " + ", ".join(invalid))
     if not formatted:
-        return raw
+        normalized_raw = normalize_email_address(raw)
+        if normalized_raw and is_valid_email_address(normalized_raw):
+            return normalized_raw
+        raise ValueError("Ungültige E-Mail-Adresse.")
     if allow_multiple:
         return ", ".join(formatted)
     return formatted[0]

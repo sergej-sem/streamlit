@@ -12,6 +12,7 @@ import pandas as pd
 from badgegen.render_pdf import render_badges_pdf_bytes
 from serienmailing.imap_sender import SerienMail
 from serienmailing.mail_builder import build_html_body, build_subject
+from shared.email_validation import is_valid_email_address
 from shared.mail_rich_text import render_final_mail_html
 
 
@@ -82,6 +83,9 @@ def build_badge_mails(
         if not email:
             skipped.append({"name": name, "email": "", "reason": "Keine E-Mail-Adresse vorhanden"})
             continue
+        if not is_valid_email_address(email):
+            skipped.append({"name": name, "email": email, "reason": "Ungültige E-Mail-Adresse"})
+            continue
 
         if not kategorie or kategorie not in tpl_map:
             skipped.append({
@@ -136,6 +140,8 @@ def build_badge_notification_mails(
     mails: list[SerienMail] = []
     skipped: list[dict] = []
     recipient_email = (recipient_email or "").strip()
+    if not is_valid_email_address(recipient_email):
+        raise ValueError("Ungültige E-Mail-Adresse für Benachrichtigungs-Empfänger.")
 
     for _, row in df_out.iterrows():
         row_dict = row.to_dict()

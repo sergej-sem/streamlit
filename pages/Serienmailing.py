@@ -33,6 +33,7 @@ from shared.config import (
     load_imap_draft_settings,
     load_smtp_send_settings,
 )
+from shared.email_validation import is_valid_email_address
 from shared.imap_append import ImapAppendConfig
 from shared.mail_content_guard import (
     assess_html_mail_batch,
@@ -156,6 +157,8 @@ with col_cred_a:
     )
 with col_cred_b:
     sender_password = st.text_input("Passwort", type="password")
+if sender_email and not is_valid_email_address(sender_email):
+    st.warning("Bitte gib eine gültige Absenderadresse ein.")
 
 st.divider()
 
@@ -231,11 +234,20 @@ with tab_manual:
         st.rerun()
 
 contacts_df: pd.DataFrame | None = st.session_state["sm_contacts"]
+invalid_contact_count = 0
 
 if contacts_df is not None and not contacts_df.empty:
     errors = validate_contacts(contacts_df)
     for error in errors:
         st.warning(error)
+    invalid_contact_count = int(
+        contacts_df["email"]
+        .fillna("")
+        .astype(str)
+        .str.strip()
+        .apply(lambda value: bool(value) and not is_valid_email_address(value))
+        .sum()
+    )
     st.caption(f"{len(contacts_df)} Kontakt(e) geladen")
     st.dataframe(contacts_df, use_container_width=True, hide_index=True)
 else:
@@ -353,12 +365,13 @@ elif (not is_send_mode) and not imap_host:
 
 ready = (
     confirmed
-    and bool(sender_email.strip())
+    and is_valid_email_address(sender_email)
     and bool(sender_password)
     and bool(subject_tpl.strip())
     and editor_html_is_meaningful(mail_body_html)
     and bool(smtp_host if is_send_mode else imap_host)
     and bool(imap_host if is_send_mode else True)
+    and invalid_contact_count == 0
 )
 
 button_label = "E-Mails senden" if is_send_mode else "Entwürfe erstellen"

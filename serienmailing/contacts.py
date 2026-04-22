@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pandas as pd
+from shared.email_validation import is_valid_email_address, normalize_email_address
 
 # Internal column names used throughout this module
 COLS = ["vorname", "firma", "email"]
@@ -102,12 +103,19 @@ def validate_contacts(df: pd.DataFrame) -> list[str]:
         errors.append("Keine Kontakte vorhanden.")
         return errors
 
-    empty = (df["email"].isna() | (df["email"].astype(str).str.strip() == "")).sum()
+    emails = df["email"].fillna("").astype(str).map(normalize_email_address)
+
+    empty = (emails == "").sum()
     if empty:
         errors.append(f"{empty} Kontakt(e) ohne E-Mail-Adresse.")
 
-    dupes = df["email"].astype(str).str.strip().str.lower()
-    dupes = dupes[dupes != ""]
+    invalid_mask = (emails != "") & ~emails.map(is_valid_email_address)
+    invalid_count = int(invalid_mask.sum())
+    if invalid_count:
+        errors.append(f"{invalid_count} Kontakt(e) mit ungültiger E-Mail-Adresse.")
+
+    dupes = emails[~invalid_mask]
+    dupes = dupes[dupes != ""].str.casefold()
     dup_count = dupes.duplicated().sum()
     if dup_count:
         errors.append(f"{dup_count} doppelte E-Mail-Adresse(n) gefunden.")

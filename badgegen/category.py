@@ -6,8 +6,9 @@ K_VIP = "VIP/REF"
 K_SPO = "Sponsor"
 K_BEO = "BEO"
 K_TEAM = "Team"
+K_HOSTESS = "Hostess"
 
-ALLOWED_CATEGORIES = [K_TN, K_VIP, K_SPO, K_BEO, K_TEAM]
+ALLOWED_CATEGORIES = [K_TN, K_VIP, K_SPO, K_BEO, K_TEAM, K_HOSTESS]
 
 EVENT_TAGS: list[str] = ["26DOR", "26BER", "26MUC"]
 
@@ -55,5 +56,9 @@ def derive_kategorie_from_historie(historie: str | None, event_tag: str) -> Opti
     # Team
     if f"{tag}_TEAM" in h:
         return K_TEAM
+
+    # Hostess
+    if f"{tag}_HOSTESS" in h:
+        return K_HOSTESS
 
     return None

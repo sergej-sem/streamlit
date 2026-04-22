@@ -24,6 +24,7 @@ from reportlab.pdfgen import canvas as rl_canvas
 from reportlab.lib import colors as rl_colors
 from reportlab.lib.utils import ImageReader
 
+from badgegen.category import ALLOWED_CATEGORIES
 from badgegen.render_pdf import (
     MIN_FONT_SIZE,
     MIN_FONT_SIZE_JOB,
@@ -335,7 +336,7 @@ class FitTextInBoxTests(unittest.TestCase):
 # Tests: render_badges_pdf_bytes
 # ---------------------------------------------------------------------------
 
-TEMPLATE_CATEGORIES = ["TN", "VIP/REF", "Sponsor", "BEO", "Team"]
+TEMPLATE_CATEGORIES = list(ALLOWED_CATEGORIES)
 
 class RenderBadgesPdfBytesTests(unittest.TestCase):
     """
@@ -559,7 +560,7 @@ class RenderBadgesPdfBytesTests(unittest.TestCase):
         self.assertTrue(result.startswith(b"%PDF"))
 
     def test_colored_qr_true_all_categories_no_crash(self):
-        for cat in ["TN", "VIP/REF", "Sponsor", "BEO", "Team"]:
+        for cat in TEMPLATE_CATEGORIES:
             with self.subTest(cat=cat):
                 row = self._make_row("Max", "Mustermann", "CEO", "ACME", cat=cat)
                 result = render_badges_pdf_bytes(
@@ -588,7 +589,7 @@ class QrColorForCategoryTests(unittest.TestCase):
     # --- colored=False → immer schwarz ---
 
     def test_colored_false_returns_default_for_known_categories(self):
-        for cat in ["TN", "VIP/REF", "Sponsor", "BEO", "Team"]:
+        for cat in TEMPLATE_CATEGORIES:
             with self.subTest(cat=cat):
                 c = _qr_color_for_category(cat, colored=False)
                 self.assertEqual(c, _QR_COLOR_DEFAULT)
@@ -624,6 +625,11 @@ class QrColorForCategoryTests(unittest.TestCase):
         c = _qr_color_for_category("Team", colored=True)
         self.assertNotEqual(c, _QR_COLOR_DEFAULT)
         self.assertEqual(c, _QR_COLOR_BY_CATEGORY["Team"])
+
+    def test_hostess_gets_blue(self):
+        c = _qr_color_for_category("Hostess", colored=True)
+        self.assertNotEqual(c, _QR_COLOR_DEFAULT)
+        self.assertEqual(c, _QR_COLOR_BY_CATEGORY["Hostess"])
 
     def test_beo_and_vip_different_colors(self):
         """BEO = violett, VIP/REF = gold — müssen unterschiedlich sein."""
@@ -982,6 +988,7 @@ class ColoredQrTemplateSelectionTests(unittest.TestCase):
             "Sponsor": (255, 0, 0),
             "BEO": (128, 0, 128),
             "Team": (0, 128, 0),
+            "Hostess": (33, 106, 179),
         }
         for cat, color in colors.items():
             path = os.path.join(cls._tmpdir, f"{cat.replace('/', '_')}.png")
@@ -1017,14 +1024,14 @@ class ColoredQrTemplateSelectionTests(unittest.TestCase):
         return pdf, used_paths[0]
 
     def test_colored_on_keeps_category_template_for_all_categories(self):
-        for cat in ["TN", "VIP/REF", "Sponsor", "BEO", "Team"]:
+        for cat in TEMPLATE_CATEGORIES:
             with self.subTest(cat=cat):
                 result, template_path = self._render_and_capture_template(cat, colored_qr=True)
                 self.assertTrue(result.startswith(b"%PDF"))
                 self.assertEqual(self._tpl_map[cat], template_path)
 
     def test_colored_off_keeps_category_template_for_all_categories(self):
-        for cat in ["TN", "VIP/REF", "Sponsor", "BEO", "Team"]:
+        for cat in TEMPLATE_CATEGORIES:
             with self.subTest(cat=cat):
                 result, template_path = self._render_and_capture_template(cat, colored_qr=False)
                 self.assertTrue(result.startswith(b"%PDF"))

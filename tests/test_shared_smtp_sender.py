@@ -177,6 +177,27 @@ class BuildEmailMessageTests(unittest.TestCase):
         self.assertEqual("recipient@example.com, Copy Two <second@example.com>", message["To"])
         self.assertEqual("copy@example.com", message["Cc"])
 
+    def test_headers_accept_modern_domains_and_plus_aliases(self):
+        message = build_email_message(
+            from_email="Sender <sender@mysecurityevent.de>",
+            to_email="Karine Peters <karine.peters@t.capital>",
+            cc_email="first.last+tag@example.com",
+            subject="Test",
+            html_body="<p>Hello</p>",
+        )
+        self.assertEqual("Sender <sender@mysecurityevent.de>", message["From"])
+        self.assertEqual("Karine Peters <karine.peters@t.capital>", message["To"])
+        self.assertEqual("first.last+tag@example.com", message["Cc"])
+
+    def test_invalid_recipient_header_raises_value_error(self):
+        with self.assertRaisesRegex(ValueError, "Ungültige E-Mail-Adresse"):
+            build_email_message(
+                from_email="sender@mysecurityevent.de",
+                to_email="bad@@example.com",
+                subject="Test",
+                html_body="<p>Hello</p>",
+            )
+
     def test_attachment_message_keeps_standard_mime_structure(self):
         message = build_email_message(
             from_email="sender@mysecurityevent.de",

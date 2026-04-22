@@ -150,6 +150,11 @@ class ValidateContactsTests(unittest.TestCase):
         errors = validate_contacts(df)
         self.assertEqual(errors, [])
 
+    def test_modern_email_addresses_are_accepted(self):
+        df = pd.DataFrame({"vorname": ["A"], "firma": ["F"], "email": ["karine.peters@t.capital"]})
+        errors = validate_contacts(df)
+        self.assertEqual(errors, [])
+
     def test_empty_df_returns_error(self):
         errors = validate_contacts(pd.DataFrame(columns=COLS))
         self.assertTrue(len(errors) > 0)
@@ -163,6 +168,11 @@ class ValidateContactsTests(unittest.TestCase):
         df = pd.DataFrame({"vorname": ["A"], "firma": ["F"], "email": [""]})
         errors = validate_contacts(df)
         self.assertTrue(any("E-Mail" in e or "email" in e.lower() or "Kontakt" in e for e in errors))
+
+    def test_invalid_email_detected(self):
+        df = pd.DataFrame({"vorname": ["A"], "firma": ["F"], "email": ["bad@@example.com"]})
+        errors = validate_contacts(df)
+        self.assertTrue(any("ungültig" in e.lower() for e in errors))
 
     def test_duplicate_case_insensitive(self):
         df = pd.DataFrame({"vorname": ["A", "B"], "firma": ["F", "G"], "email": ["Test@X.com", "test@x.com"]})

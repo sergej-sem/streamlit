@@ -29,8 +29,11 @@ class MailRichTextDefaultsTests(unittest.TestCase):
         html = plain_text_to_editor_html("\n\nBeste Grüße,")
         self.assertIn("Beste Grüße,", html)
 
-    def test_quill_toolbar_contains_link_tool(self):
-        self.assertIn("link", str(quill_toolbar_config()))
+    def test_quill_toolbar_contains_link_and_list_tools(self):
+        toolbar = str(quill_toolbar_config())
+        self.assertIn("link", toolbar)
+        self.assertIn("ordered", toolbar)
+        self.assertIn("bullet", toolbar)
 
     def test_quill_ui_bridge_contains_german_labels_and_link_handler_override(self):
         bridge_html = _quill_ui_bridge_html()
@@ -79,6 +82,19 @@ class MailRichTextSanitizationTests(unittest.TestCase):
         self.assertIn("color", cleaned)
         self.assertIn("font-size", cleaned)
 
+    def test_sanitize_editor_html_normalizes_outlook_b_and_i_tags(self):
+        cleaned = sanitize_editor_html('<p class="MsoNormal"><b>Hallo</b> <i>Welt</i><o:p></o:p></p>')
+        self.assertIn("<strong>Hallo</strong>", cleaned)
+        self.assertIn("<em>Welt</em>", cleaned)
+        self.assertNotIn("<o:p>", cleaned)
+
+    def test_sanitize_editor_html_converts_font_tags_to_span_styles(self):
+        cleaned = sanitize_editor_html('<p><font color="#1F497D" face="Calibri" size="4">Hallo</font></p>')
+        self.assertIn("<span", cleaned)
+        self.assertIn("color:#1F497D", cleaned)
+        self.assertIn("font-family:Calibri", cleaned)
+        self.assertIn("font-size:1.125em", cleaned)
+
     def test_render_personalized_rich_text_html_replaces_placeholders_and_escapes_values(self):
         rendered = render_personalized_rich_text_html(
             "<p>Hallo {vorname}, willkommen bei {firma} ({email}).</p>",
@@ -123,6 +139,15 @@ class MailRichTextSanitizationTests(unittest.TestCase):
         self.assertIn('href="https://mysecurityevent.de"', rendered)
         self.assertIn(">Link</a>", rendered)
         self.assertEqual(1, rendered.count("Severin Wagner"))
+
+    def test_render_final_mail_html_keeps_lists(self):
+        rendered = render_final_mail_html(
+            "<p>Agenda:</p><ul><li><strong>Punkt 1</strong></li><li>Punkt 2</li></ul>",
+            sender_email="severin.wagner@mysecurityevent.de",
+        )
+        self.assertIn("<ul>", rendered)
+        self.assertIn("<li><strong>Punkt 1</strong></li>", rendered)
+        self.assertIn("<li>Punkt 2</li>", rendered)
 
 
     def test_render_final_mail_html_normalizes_paragraph_spacing(self):

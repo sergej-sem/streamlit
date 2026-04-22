@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from shared.email_validation import is_valid_email_address
 from shared.mail_rich_text import editor_html_is_meaningful
 
 
@@ -16,6 +17,8 @@ def missing_preview_requirements(
     missing: list[str] = []
     if not str(sender_email or "").strip():
         missing.append("Absenderadresse")
+    elif not is_valid_email_address(sender_email):
+        missing.append("gültige Absenderadresse")
     if require_password and not str(sender_password or "").strip():
         missing.append("Passwort")
     if not has_recipients:

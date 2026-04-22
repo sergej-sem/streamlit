@@ -44,6 +44,7 @@ _QR_COLOR_BY_CATEGORY = {
     "Sponsor": colors.black,
     "BEO":     colors.HexColor("#660099"),  # dunkelviolett
     "Team":    colors.HexColor("#cc0000"),  # dunkelrot
+    "Hostess": colors.HexColor("#216AB3"),  # dunkelblau
 }
 _QR_COLOR_DEFAULT = colors.black
 

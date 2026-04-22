@@ -19,6 +19,7 @@ from shared.mail_content_guard import (
     assess_html_mail_content,
     evaluate_send_guard,
 )
+from shared.email_validation import is_valid_email_address
 from shared.mail_errors import friendly_with_technical_hint
 from shared.mail_errors import friendly_config_issue
 from shared.mail_progress import create_streamlit_smtp_progress_reporter
@@ -60,6 +61,18 @@ SENDER_EMAIL_SUGGESTIONS = [
 CONFIRM_WORD_DRAFTS = "DRAFTS"
 CONFIRM_WORD_SEND = "SENDEN"
 MAIL_MODE_OPTIONS = ("Entw\u00fcrfe", "Senden")
+
+
+def _invalid_selected_mail_addresses(mails) -> list[str]:
+    invalid: list[str] = []
+    for mail in mails:
+        to_email = (mail.to_email or "").strip()
+        cc_email = (mail.cc_email or "").strip()
+        if not is_valid_email_address(to_email):
+            invalid.append(f"{mail.sponsor_name}: {to_email or '-'}")
+        if cc_email and not is_valid_email_address(cc_email):
+            invalid.append(f"{mail.sponsor_name} (Kopie): {cc_email}")
+    return invalid
 
 
 def _init_state() -> None:
@@ -362,9 +375,12 @@ is_send_mode = mail_mode == "Senden"
 expected_confirmation = f"{CONFIRM_WORD_SEND if is_send_mode else CONFIRM_WORD_DRAFTS} {selected_count}"
 
 sender_email = sender_email.strip()
+invalid_selected_addresses = _invalid_selected_mail_addresses(selected_mails)
 
 if not sender_email:
     st.warning("Bitte gib Deine E-Mail-Adresse ein.")
+elif not is_valid_email_address(sender_email):
+    st.warning("Bitte gib eine gültige E-Mail-Adresse ein.")
 elif not sender_password:
     st.warning("Bitte gib Dein E-Mail-Passwort ein.")
 elif is_send_mode and base_smtp_config is None:
@@ -397,6 +413,12 @@ elif (not is_send_mode) and not base_imap_config.drafts_folder.strip():
     )
 elif not selected_mails:
     st.warning("Bitte mindestens einen Sponsor in der Tabelle auswählen.")
+elif invalid_selected_addresses:
+    preview = "; ".join(invalid_selected_addresses[:3])
+    suffix = f" Beispiele: {preview}" if preview else ""
+    st.warning(
+        f"Die Auswahl enthält {len(invalid_selected_addresses)} ungültige E-Mail-Adresse(n).{suffix}"
+    )
 else:
     if is_send_mode:
         st.info("Die ausgewählten E-Mails werden direkt per SMTP versendet.")

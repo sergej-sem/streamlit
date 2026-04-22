@@ -59,9 +59,19 @@ _SIZE_STYLE_MAP = {
     "ql-size-large": "font-size: 1.25em",
     "ql-size-huge": "font-size: 1.75em",
 }
+_FONT_SIZE_ATTRIBUTE_MAP = {
+    "1": "0.75em",
+    "2": "0.85em",
+    "3": "1em",
+    "4": "1.125em",
+    "5": "1.5em",
+    "6": "2em",
+    "7": "3em",
+}
 _QUILL_TOOLBAR = [
     [{"font": ["", "serif", "monospace"]}, {"size": ["small", False, "large", "huge"]}],
     ["bold", "italic", "underline", "link"],
+    [{"list": "ordered"}, {"list": "bullet"}],
     [{"color": []}, {"background": []}],
     ["clean"],
 ]
@@ -416,6 +426,62 @@ def plain_text_to_editor_html(text: str) -> str:
     return "".join(paragraphs)
 
 
+def _extract_html_attr(attrs: str, name: str) -> str:
+    match = re.search(
+        rf"""\b{name}\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))""",
+        attrs,
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return ""
+    return next((group for group in match.groups() if group is not None), "").strip()
+
+
+def _font_size_style(value: str) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    if raw in _FONT_SIZE_ATTRIBUTE_MAP:
+        return _FONT_SIZE_ATTRIBUTE_MAP[raw]
+    if re.fullmatch(r"\d+(?:\.\d+)?(?:px|pt|em|rem|%)", raw, flags=re.IGNORECASE):
+        return raw
+    return ""
+
+
+def _normalize_outlook_html(value: str) -> str:
+    normalized = re.sub(r"(?is)</?o:p[^>]*>", "", value)
+    normalized = re.sub(r"(?is)<\s*b(?:\s[^>]*)?>", "<strong>", normalized)
+    normalized = re.sub(r"(?is)</\s*b\s*>", "</strong>", normalized)
+    normalized = re.sub(r"(?is)<\s*i(?:\s[^>]*)?>", "<em>", normalized)
+    normalized = re.sub(r"(?is)</\s*i\s*>", "</em>", normalized)
+
+    def _rewrite_font_tag(match: re.Match[str]) -> str:
+        attrs = match.group("attrs") or ""
+        styles: list[str] = []
+        color = _extract_html_attr(attrs, "color")
+        face = _extract_html_attr(attrs, "face")
+        size = _font_size_style(_extract_html_attr(attrs, "size"))
+
+        if color:
+            styles.append(f"color:{color}")
+        if face:
+            styles.append(f"font-family:{face}")
+        if size:
+            styles.append(f"font-size:{size}")
+
+        if not styles:
+            return "<span>"
+        return f'<span style="{"; ".join(styles)}">'
+
+    normalized = re.sub(
+        r"(?is)<\s*font(?P<attrs>[^>]*)>",
+        _rewrite_font_tag,
+        normalized,
+    )
+    normalized = re.sub(r"(?is)</\s*font\s*>", "</span>", normalized)
+    return normalized
+
+
 def _replace_placeholders(template_html: str, values: Mapping[str, str]) -> str:
     result = template_html
     for key, value in values.items():
@@ -476,7 +542,7 @@ def sanitize_editor_html(value: str | None) -> str:
     normalized = _normalize_editor_html(value)
     if not normalized:
         normalized = "<p><br></p>"
-    inlined = _inline_known_quill_classes(normalized)
+    inlined = _inline_known_quill_classes(_normalize_outlook_html(normalized))
     if bleach is None:
         fallback_text = _fallback_html_to_text(inlined)
         return "<p><br></p>" if not fallback_text else plain_text_to_editor_html(fallback_text)

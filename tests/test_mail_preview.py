@@ -38,6 +38,16 @@ class MailPreviewRequirementTests(unittest.TestCase):
         )
         self.assertEqual(tuple(), missing)
 
+    def test_preview_requires_valid_sender_address(self):
+        missing = missing_preview_requirements(
+            sender_email="bad@@example.com",
+            has_recipients=True,
+            subject="Betreff",
+            body_html="<p><br></p><p><br></p><p>Beste Grüße,</p>",
+            require_password=False,
+        )
+        self.assertEqual(("gültige Absenderadresse",), missing)
+
     def test_preview_ready_returns_true_when_all_required_inputs_exist(self):
         self.assertTrue(
             preview_ready(

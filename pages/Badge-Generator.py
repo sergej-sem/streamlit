@@ -35,6 +35,7 @@ from shared.mail_content_guard import (
     assess_html_mail_content,
     evaluate_send_guard,
 )
+from shared.email_validation import is_valid_email_address
 from shared.mail_errors import friendly_config_issue, friendly_with_technical_hint
 from shared.mail_progress import create_streamlit_smtp_progress_reporter
 from shared.mail_preview import missing_preview_requirements, preview_ready
@@ -82,6 +83,7 @@ DEFAULT_TEMPLATES = {
     "Sponsor": str(BADGES_DIR / "sponsor.png"),
     "BEO": str(BADGES_DIR / "beo.png"),
     "Team": str(BADGES_DIR / "team.png"),
+    "Hostess": str(BADGES_DIR / "hostess.png"),
 }
 
 _BG_CONFIRM_WORD  = "ENTWÜRFE"
@@ -131,6 +133,16 @@ def _bg_show_guard_feedback(feedback) -> None:
         st.info(text)
     else:
         st.caption(text)
+
+
+def _badge_email_series(df: pd.DataFrame) -> pd.Series:
+    if "email" not in df.columns:
+        return pd.Series([""] * len(df), index=df.index, dtype=str)
+    return df["email"].fillna("").astype(str).str.strip()
+
+
+def _badge_valid_email_mask(df: pd.DataFrame) -> pd.Series:
+    return _badge_email_series(df).apply(is_valid_email_address)
 
 
 def _bg_init_notification_settings() -> None:
@@ -435,9 +447,11 @@ st.session_state.setdefault("bg_notify_result", None)
 
 st.divider()
 
-email_col = df_out["email"].str.strip() if "email" in df_out.columns else pd.Series([""] * len(df_out))
-n_with_email = int((email_col != "").sum())
-n_without_email = len(df_out) - n_with_email
+email_col = _badge_email_series(df_out)
+valid_email_mask = _badge_valid_email_mask(df_out)
+n_with_email = int(valid_email_mask.sum())
+n_without_email = int((email_col == "").sum())
+n_invalid_email = len(df_out) - n_with_email - n_without_email
 n_badge_notifications = len(df_out)
 
 render_section_title("Badge-Status senden (Empfänger: Eventmanager)")
@@ -487,6 +501,13 @@ else:
             placeholder=DEFAULT_BADGE_NOTIFICATION_RECIPIENT,
             on_change=_bg_persist_notification_settings,
         )
+        bg_notify_sender_valid = is_valid_email_address(bg_notify_sender)
+        bg_notify_recipient_valid = is_valid_email_address(bg_notify_recipient)
+
+        if bg_notify_sender and not bg_notify_sender_valid:
+            st.warning("Bitte gib eine gültige E-Mail-Adresse als Postfach / Absender ein.")
+        if bg_notify_recipient and not bg_notify_recipient_valid:
+            st.warning("Bitte gib eine gültige E-Mail-Adresse als Empfänger ein.")
 
         if bg_notify_is_send_mode and not bg_notify_smtp_host:
             st.warning(
@@ -522,8 +543,8 @@ else:
 
         bg_notify_ready = (
             n_badge_notifications > 0
-            and bool(bg_notify_sender)
-            and bool(bg_notify_recipient)
+            and bg_notify_sender_valid
+            and bg_notify_recipient_valid
             and bool(bg_notify_pass)
             and bool(bg_notify_smtp_host if bg_notify_is_send_mode else bg_notify_imap_host)
             and bool(bg_notify_imap_host if bg_notify_is_send_mode else True)
@@ -667,12 +688,16 @@ st.divider()
 
 with st.expander("Badge-Mails speichern oder senden", expanded=False):
     st.markdown(
-        f"**{n_with_email}** Person(en) mit E-Mail-Adresse · "
-        f"**{n_without_email}** ohne (werden übersprungen)"
+        f"**{n_with_email}** Person(en) mit gültiger E-Mail-Adresse · "
+        f"**{n_without_email}** ohne · "
+        f"**{n_invalid_email}** ungültig (werden übersprungen)"
     )
 
+    if n_invalid_email:
+        st.warning(f"{n_invalid_email} Person(en) haben eine ungültige E-Mail-Adresse und werden übersprungen.")
+
     if n_with_email == 0:
-        st.warning("Keine Person hat eine E-Mail-Adresse hinterlegt. Mail-Erstellung nicht möglich.")
+        st.warning("Keine Person hat eine gültige E-Mail-Adresse hinterlegt. Mail-Erstellung nicht möglich.")
     else:
         bg_imap_host, bg_imap_port, bg_imap_folder, bg_imap_sent_folder, bg_imap_ssl = _bg_load_imap_defaults()
         bg_smtp_host, bg_smtp_port, bg_smtp_ssl, bg_smtp_starttls, bg_smtp_timeout = _bg_load_smtp_defaults()
@@ -692,7 +717,10 @@ with st.expander("Badge-Mails speichern oder senden", expanded=False):
             suggestions=SENDER_EMAIL_SUGGESTIONS,
             placeholder="vorname.nachname@mysecurityevent.de",
         )
+        bg_sender_valid = is_valid_email_address(bg_sender)
         bg_pass = st.text_input("Passwort", type="password", key="bg_imap_pass")
+        if bg_sender and not bg_sender_valid:
+            st.warning("Bitte gib eine gültige E-Mail-Adresse als Absender ein.")
 
         bg_subject = st.text_input(
             "Betreff",
@@ -714,7 +742,7 @@ with st.expander("Badge-Mails speichern oder senden", expanded=False):
             placeholder=_BG_DEFAULT_BODY,
         )
 
-        df_preview = df_out[df_out["email"].str.strip() != ""].reset_index(drop=True)
+        df_preview = df_out[valid_email_mask].reset_index(drop=True)
         bg_preview_missing = missing_preview_requirements(
             sender_email=bg_sender,
             has_recipients=not df_preview.empty,
@@ -797,7 +825,7 @@ with st.expander("Badge-Mails speichern oder senden", expanded=False):
 
         bg_ready = (
             bg_confirmed
-            and bool(bg_sender.strip())
+            and bg_sender_valid
             and bool(bg_pass)
             and bool(bg_subject.strip())
             and editor_html_is_meaningful(bg_body_html)

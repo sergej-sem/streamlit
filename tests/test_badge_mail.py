@@ -121,6 +121,19 @@ class BuildBadgeMailsTests(unittest.TestCase):
         mails, _ = build_badge_mails(df, "Subj", "Body", "", self._tpl_map)
         self.assertEqual(mails[0].to_email, "test@example.com")
 
+    def test_modern_email_address_format_is_accepted(self):
+        df = self._df([_row(email="karine.peters@t.capital")])
+        mails, skipped = build_badge_mails(df, "Subj", "Body", "", self._tpl_map)
+        self.assertEqual(len(skipped), 0)
+        self.assertEqual("karine.peters@t.capital", mails[0].to_email)
+
+    def test_invalid_email_address_is_skipped(self):
+        df = self._df([_row(email="bad@@example.com")])
+        mails, skipped = build_badge_mails(df, "Subj", "Body", "", self._tpl_map)
+        self.assertEqual(mails, [])
+        self.assertEqual(1, len(skipped))
+        self.assertIn("Ungültige", skipped[0]["reason"])
+
     def test_subject_placeholder_replaced(self):
         df = self._df([_row(firstname="Eva", company="Corp")])
         mails, _ = build_badge_mails(df, "{vorname} von {firma}", "Body", "", self._tpl_map)
@@ -236,6 +249,11 @@ class BuildBadgeNotificationMailsTests(unittest.TestCase):
         self.assertEqual(mails, [])
         self.assertEqual(len(skipped), 1)
         self.assertIn("UNBEKANNT", skipped[0]["reason"])
+
+    def test_notification_requires_valid_recipient_email(self):
+        df = self._df([_row()])
+        with self.assertRaisesRegex(ValueError, "Ungültige E-Mail-Adresse"):
+            build_badge_notification_mails(df, "bad@@example.com", self._tpl_map)
 
 
 if __name__ == "__main__":
