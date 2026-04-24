@@ -62,6 +62,7 @@ def execute_plan_row(
     build_payload: Callable[..., dict],
     create_user: Callable[[dict], Mapping[str, Any]],
     assign_user_licenses: Callable[[str, list[str]], None],
+    delete_user: Callable[[str], None],
 ) -> dict:
     status = row.get("status", "")
     upn = row.get("plannedUPN", "")
@@ -110,16 +111,60 @@ def execute_plan_row(
         created = create_user(payload)
         user_id = created.get("id") if hasattr(created, "get") else None
 
-        if selected_sku_ids and user_id:
+        if selected_sku_ids:
+            rollback_identifier = str(user_id or upn)
+            if not rollback_identifier:
+                raise RuntimeError("Benutzer wurde angelegt, kann aber ohne ID/UPN nicht zurückgerollt werden.")
+
+            if not user_id:
+                try:
+                    delete_user(rollback_identifier)
+                except Exception as rollback_exc:
+                    return _finalize_execution_result(
+                        log_row,
+                        result="FEHLER",
+                        hint=(
+                            "Benutzer angelegt, aber Graph lieferte keine ID für die Lizenzzuweisung; "
+                            f"Rollback fehlgeschlagen: {rollback_exc}"
+                        ),
+                        outcome="error_rollback_failed",
+                        user_created=True,
+                        license_assignment_failed=True,
+                    )
+
+                return _finalize_execution_result(
+                    log_row,
+                    result="FEHLER",
+                    hint="Benutzer angelegt, aber Graph lieferte keine ID; Benutzer wurde zurückgerollt",
+                    outcome="error",
+                    user_created=False,
+                    license_assignment_failed=True,
+                )
+
             try:
                 assign_user_licenses(str(user_id), selected_sku_ids)
             except Exception as exc:
+                try:
+                    delete_user(rollback_identifier)
+                except Exception as rollback_exc:
+                    return _finalize_execution_result(
+                        log_row,
+                        result="FEHLER",
+                        hint=(
+                            f"Lizenzzuweisung fehlgeschlagen: {exc}. "
+                            f"Rollback fehlgeschlagen: {rollback_exc}"
+                        ),
+                        outcome="error_rollback_failed",
+                        user_created=True,
+                        license_assignment_failed=True,
+                    )
+
                 return _finalize_execution_result(
                     log_row,
-                    result="TEILERFOLG",
-                    hint=f"Lizenzzuweisung fehlgeschlagen: {exc}",
-                    outcome="partial_success",
-                    user_created=True,
+                    result="FEHLER",
+                    hint=f"Lizenzzuweisung fehlgeschlagen: {exc}. Benutzer wurde zurückgerollt",
+                    outcome="error",
+                    user_created=False,
                     license_assignment_failed=True,
                 )
 

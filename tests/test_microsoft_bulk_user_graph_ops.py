@@ -6,7 +6,10 @@ from microsoft_bulk_user.graph_ops import (
     _escape_odata_string,
     assign_licenses,
     create_user_graph,
+    delete_user_graph,
+    evaluate_license_selection,
     get_access_token,
+    get_subscribed_sku_inventory,
     get_subscribed_sku_map,
     name_exists,
     upn_exists,
@@ -58,7 +61,19 @@ class GraphOpsHelpersTests(unittest.TestCase):
     def test_get_subscribed_sku_map_parses_mapping(self, mock_get):
         mock_get.return_value = response(
             200,
-            {"value": [{"skuPartNumber": "FLOW_FREE", "skuId": "sku-1"}, {"skuPartNumber": "POWER_BI_STANDARD"}]},
+            {
+                "value": [
+                    {
+                        "skuPartNumber": "FLOW_FREE",
+                        "skuId": "sku-1",
+                        "consumedUnits": 2,
+                        "prepaidUnits": {"enabled": 5},
+                        "capabilityStatus": "Enabled",
+                        "appliesTo": "User",
+                    },
+                    {"skuPartNumber": "POWER_BI_STANDARD"},
+                ]
+            },
         )
         self.assertEqual(get_subscribed_sku_map("token"), {"FLOW_FREE": "sku-1"})
 
@@ -67,6 +82,72 @@ class GraphOpsHelpersTests(unittest.TestCase):
         mock_get.return_value = response(500, text="boom")
         with self.assertRaisesRegex(RuntimeError, "subscribedSkus"):
             get_subscribed_sku_map("token")
+
+    @patch("microsoft_bulk_user.graph_ops.requests.get")
+    def test_get_subscribed_sku_inventory_parses_available_units(self, mock_get):
+        mock_get.return_value = response(
+            200,
+            {
+                "value": [
+                    {
+                        "skuPartNumber": "O365_BUSINESS_PREMIUM",
+                        "skuId": "sku-1",
+                        "consumedUnits": 7,
+                        "prepaidUnits": {"enabled": 10},
+                        "capabilityStatus": "Enabled",
+                        "appliesTo": "User",
+                    },
+                    {
+                        "skuPartNumber": "POWER_BI_STANDARD",
+                        "skuId": "sku-2",
+                        "consumedUnits": 1,
+                        "prepaidUnits": {"enabled": 50},
+                        "capabilityStatus": "LockedOut",
+                        "appliesTo": "User",
+                    },
+                ]
+            },
+        )
+
+        inventory = get_subscribed_sku_inventory("token")
+
+        self.assertEqual(inventory["O365_BUSINESS_PREMIUM"]["available_units"], 3)
+        self.assertEqual(inventory["O365_BUSINESS_PREMIUM"]["enabled_units"], 10)
+        self.assertEqual(inventory["O365_BUSINESS_PREMIUM"]["consumed_units"], 7)
+        self.assertEqual(inventory["POWER_BI_STANDARD"]["available_units"], 0)
+
+    def test_evaluate_license_selection_reports_missing_and_insufficient_parts(self):
+        inventory = {
+            "O365_BUSINESS_PREMIUM": {
+                "sku_id": "sku-1",
+                "available_units": 2,
+                "consumed_units": 8,
+                "enabled_units": 10,
+                "capability_status": "Enabled",
+                "applies_to": "User",
+            }
+        }
+
+        result = evaluate_license_selection(
+            ["O365_BUSINESS_PREMIUM", "POWER_BI_STANDARD"],
+            inventory,
+            required_units=3,
+        )
+
+        self.assertEqual(result["selected_sku_ids"], ["sku-1"])
+        self.assertEqual(result["missing_parts"], ["POWER_BI_STANDARD"])
+        self.assertEqual(
+            result["insufficient_parts"],
+            [
+                {
+                    "part": "O365_BUSINESS_PREMIUM",
+                    "available_units": 2,
+                    "required_units": 3,
+                    "capability_status": "Enabled",
+                    "applies_to": "User",
+                }
+            ],
+        )
 
     @patch("microsoft_bulk_user.graph_ops.requests.get")
     def test_upn_exists_returns_true_when_value_present(self, mock_get):
@@ -128,6 +209,18 @@ class GraphOpsHelpersTests(unittest.TestCase):
         mock_post.return_value = response(400, text="bad")
         with self.assertRaisesRegex(RuntimeError, "Lizenzzuweisung fehlgeschlagen"):
             assign_licenses("user-1", ["sku-1"], "token")
+
+    @patch("microsoft_bulk_user.graph_ops.requests.delete")
+    def test_delete_user_graph_succeeds_on_204(self, mock_delete):
+        mock_delete.return_value = response(204)
+        delete_user_graph("user-1", "token")
+        mock_delete.assert_called_once()
+
+    @patch("microsoft_bulk_user.graph_ops.requests.delete")
+    def test_delete_user_graph_raises_on_error(self, mock_delete):
+        mock_delete.return_value = response(400, text="bad")
+        with self.assertRaisesRegex(RuntimeError, "Benutzer löschen fehlgeschlagen"):
+            delete_user_graph("user-1", "token")
 
     def test_get_access_token_uses_silent_result(self):
         app = Mock()

@@ -10,8 +10,10 @@ from microsoft_bulk_user.graph_ops import (
     assign_licenses,
     create_graph_app,
     create_user_graph,
+    delete_user_graph,
+    evaluate_license_selection,
     get_access_token,
-    get_subscribed_sku_map,
+    get_subscribed_sku_inventory,
     name_exists,
     upn_exists,
     user_payload,
@@ -65,8 +67,8 @@ def get_cached_graph_app(cfg: GraphConfig):
 
 
 @st.cache_data(ttl=300)
-def get_subscribed_sku_map_cached(token: str) -> Dict[str, str]:
-    return get_subscribed_sku_map(token)
+def get_subscribed_sku_inventory_cached(token: str) -> Dict[str, Dict]:
+    return get_subscribed_sku_inventory(token)
 
 
 @st.cache_data(ttl=300)
@@ -182,22 +184,8 @@ with main_col:
 
     try:
         token = get_access_token(graph_cfg, app=get_cached_graph_app(graph_cfg))
-        sku_map = get_subscribed_sku_map_cached(token)
-        selected_sku_ids: List[str] = []
         selected_license_labels = [LICENSE_CATALOG.get(part, part) for part in selected_license_parts]
-        missing_parts: List[str] = []
-        for part in selected_license_parts:
-            if part in sku_map:
-                selected_sku_ids.append(sku_map[part])
-            else:
-                missing_parts.append(part)
-
-        if missing_parts:
-            missing_names = ", ".join(LICENSE_CATALOG.get(part, part) for part in missing_parts)
-            st.warning(
-                "Achtung: Folgende ausgewählte Lizenzen sind im Tenant nicht verfügbar und werden ignoriert: "
-                + missing_names
-            )
+        sku_inventory = get_subscribed_sku_inventory_cached(token)
     except Exception as exc:
         st.error(f"Anmeldung an Microsoft (Graph) fehlgeschlagen: {exc}")
         st.stop()
@@ -242,6 +230,34 @@ with main_col:
     err_count = int((plan["status"] == "FEHLER").sum())
     st.write(f"BEREIT: **{ready_count}** · ÜBERSPRUNGEN: **{skip_count}** · FEHLER: **{err_count}**")
 
+    license_check = evaluate_license_selection(
+        selected_license_parts,
+        sku_inventory,
+        required_units=ready_count,
+    )
+    selected_sku_ids: List[str] = list(license_check["selected_sku_ids"])
+    missing_parts: List[str] = list(license_check["missing_parts"])
+    insufficient_parts: List[Dict] = list(license_check["insufficient_parts"])
+
+    if missing_parts:
+        missing_names = ", ".join(LICENSE_CATALOG.get(part, part) for part in missing_parts)
+        message = "Folgende ausgewählte Lizenzen sind im Tenant nicht verfügbar: " + missing_names
+        if dry_run:
+            st.warning("Testlauf: " + message)
+        else:
+            st.error(message)
+
+    if insufficient_parts:
+        detail_text = "; ".join(
+            f"{LICENSE_CATALOG.get(item['part'], item['part'])}: {item['available_units']} frei, {item['required_units']} benötigt"
+            for item in insufficient_parts
+        )
+        message = "Zu wenig freie Lizenzplätze für den Live-Lauf: " + detail_text
+        if dry_run:
+            st.warning("Testlauf: " + message)
+        else:
+            st.error(message)
+
     expected_live_confirmation = f"{CONFIRM_WORD_LIVE} {ready_count}"
     live_confirmation_placeholder = expected_live_confirmation
 
@@ -265,6 +281,8 @@ with main_col:
         and (not dry_run)
         and bool(password.strip())
         and ready_count > 0
+        and not missing_parts
+        and not insufficient_parts
         and (confirm_text.strip().upper() == expected_live_confirmation.upper())
     )
 
@@ -272,6 +290,8 @@ with main_col:
         st.error("Die Live-Benutzeranlage ist aktuell deaktiviert.")
     elif not dry_run and not password.strip():
         st.error("Zum Anlegen bitte ein Start-Passwort eingeben.")
+    elif not dry_run and (missing_parts or insufficient_parts):
+        st.error("Zum Anlegen müssen alle ausgewählten Lizenzen verfügbar sein und genug freie Plätze haben.")
     elif not dry_run and not allow_live:
         st.error(f"Zum Anlegen bitte links exakt {live_confirmation_placeholder} eintippen.")
 
@@ -288,6 +308,9 @@ with main_col:
             st.stop()
         if not dry_run and not password.strip():
             st.error("Zum Anlegen bitte ein Start-Passwort eingeben.")
+            st.stop()
+        if not dry_run and (missing_parts or insufficient_parts):
+            st.error("Zum Anlegen müssen alle ausgewählten Lizenzen verfügbar sein und genug freie Plätze haben.")
             st.stop()
         if not dry_run and not allow_live:
             st.error(f"Zum Anlegen bitte links exakt {expected_live_confirmation} eintippen.")
@@ -325,6 +348,7 @@ with main_col:
                 build_payload=lambda **kw: user_payload(**kw),
                 create_user=lambda payload: create_user_graph(payload, token),
                 assign_user_licenses=lambda user_id, sku_ids: assign_licenses(user_id, sku_ids, token),
+                delete_user=lambda user_id: delete_user_graph(user_id, token),
             )
             log_rows.append({**result["log_row"], **run_context})
 
@@ -341,7 +365,6 @@ with main_col:
         st.write(
             "Ergebnisübersicht: "
             f"ANGELEGT: **{int(result_counts.get('ANGELEGT', 0))}** · "
-            f"TEILERFOLG: **{int(result_counts.get('TEILERFOLG', 0))}** · "
             f"FEHLER: **{int(result_counts.get('FEHLER', 0))}** · "
             f"TESTLAUF: **{int(result_counts.get('TESTLAUF', 0))}** · "
             f"ÜBERSPRUNGEN: **{int(result_counts.get('ÜBERSPRUNGEN', 0))}**"
