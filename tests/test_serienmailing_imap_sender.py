@@ -12,6 +12,7 @@ from serienmailing.imap_sender import (
     _friendly_imap_error,
     create_serienmailing_drafts,
 )
+from shared.mail_message import MailAttachment
 
 
 def _make_config(**overrides) -> MailConfig:
@@ -34,6 +35,8 @@ def _make_mail(**overrides) -> SerienMail:
         firma="Acme GmbH",
         subject="Test Subject",
         html_body="<p>Hello <b>World</b></p>",
+        cc_email="",
+        attachments=(),
     )
     defaults.update(overrides)
     return SerienMail(**defaults)
@@ -110,6 +113,10 @@ class BuildMessageTests(unittest.TestCase):
     def test_to_header(self):
         msg = self._parse(_make_mail(to_email="dest@example.com"))
         self.assertEqual("dest@example.com", msg["To"])
+
+    def test_cc_header(self):
+        msg = self._parse(_make_mail(cc_email="copy@example.com"))
+        self.assertEqual("copy@example.com", msg["Cc"])
 
     def test_date_header_present(self):
         msg = self._parse(_make_mail())
@@ -199,6 +206,22 @@ class BuildMessageTests(unittest.TestCase):
             self.assertEqual("quoted-printable", part["Content-Transfer-Encoding"])
         attachment = next(parsed.iter_attachments())
         self.assertEqual("badge-Jorg-Muller.pdf", attachment.get_filename())
+
+    def test_multiple_attachments_are_added(self):
+        msg = self._parse(
+            _make_mail(
+                attachments=(
+                    MailAttachment(filename="gespraechsplan.pdf", content=b"%PDF-1.4"),
+                    MailAttachment(filename="vortragsliste.xlsx", content=b"PKfake"),
+                )
+            )
+        )
+        attachment_names = [
+            part.get_filename()
+            for part in msg.walk()
+            if part.get_content_disposition() == "attachment"
+        ]
+        self.assertEqual(["gespraechsplan.pdf", "vortragsliste.xlsx"], attachment_names)
 
 
 # ── create_serienmailing_drafts — validation ──────────────────────────────────

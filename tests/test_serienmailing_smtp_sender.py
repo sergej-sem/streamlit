@@ -4,6 +4,7 @@ from unittest.mock import patch
 from serienmailing.imap_sender import SerienMail
 from serienmailing.smtp_sender import send_serienmailing_messages
 from shared.imap_append import ImapAppendConfig
+from shared.mail_message import MailAttachment
 from shared.smtp_sender import SmtpSendConfig, SmtpSendResult
 
 
@@ -28,6 +29,8 @@ def _make_mail(**overrides) -> SerienMail:
         firma="Acme GmbH",
         subject="Test Subject",
         html_body="<p>Hello</p>",
+        cc_email="",
+        attachments=(),
         attachment_bytes=None,
         attachment_filename=None,
     )
@@ -92,6 +95,32 @@ class SendSerienmailingMessagesTests(unittest.TestCase):
         self.assertEqual(1, len(prepared_messages))
         payload = prepared_messages[0].message.as_string()
         self.assertIn("badge.pdf", payload)
+
+    @patch("serienmailing.smtp_sender.send_email_messages")
+    def test_passes_multiple_attachments_and_cc_through(self, mock_send):
+        mock_send.return_value = [
+            SmtpSendResult(
+                to_email="recipient@example.com",
+                subject="Test Subject",
+                status="sent",
+                details="",
+            )
+        ]
+
+        mail = _make_mail(
+            cc_email="copy@example.com",
+            attachments=(
+                MailAttachment(filename="gespraechsplan.pdf", content=b"%PDF-1.4"),
+                MailAttachment(filename="vortragsliste.xlsx", content=b"PKfake"),
+            ),
+        )
+        send_serienmailing_messages([mail], _make_config())
+
+        prepared_messages, _ = mock_send.call_args[0]
+        payload = prepared_messages[0].message.as_string()
+        self.assertIn("copy@example.com", payload)
+        self.assertIn("gespraechsplan.pdf", payload)
+        self.assertIn("vortragsliste.xlsx", payload)
 
     @patch("serienmailing.smtp_sender.send_email_messages")
     def test_passes_sent_copy_config_through(self, mock_send):

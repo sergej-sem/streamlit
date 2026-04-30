@@ -5,7 +5,7 @@ from email.policy import SMTP
 from unittest.mock import MagicMock, patch
 
 from shared.imap_append import ImapAppendConfig
-from shared.mail_message import build_email_message
+from shared.mail_message import MailAttachment, build_email_message
 from shared.smtp_sender import (
     PreparedEmailMessage,
     SmtpSendConfig,
@@ -259,6 +259,25 @@ class BuildEmailMessageTests(unittest.TestCase):
         parsed = BytesParser(policy=SMTP).parsebytes(raw)
         attachment = next(parsed.iter_attachments())
         self.assertEqual("badge-Jorg-Muller.pdf", attachment.get_filename())
+
+    def test_multiple_attachments_are_added(self):
+        message = build_email_message(
+            from_email="sender@mysecurityevent.de",
+            to_email="recipient@example.com",
+            cc_email="copy@example.com",
+            subject="Test",
+            html_body="<p>Hello</p>",
+            attachments=(
+                MailAttachment(filename="gespraechsplan.pdf", content=b"%PDF-1.4"),
+                MailAttachment(filename="vortragsliste.xlsx", content=b"PKfake"),
+            ),
+        )
+
+        parsed = BytesParser(policy=SMTP).parsebytes(message.as_bytes(policy=SMTP))
+        attachment_names = [attachment.get_filename() for attachment in parsed.iter_attachments()]
+
+        self.assertEqual("copy@example.com", parsed["Cc"])
+        self.assertEqual(["gespraechsplan.pdf", "vortragsliste.xlsx"], attachment_names)
 
 
 class SendEmailMessagesTests(unittest.TestCase):

@@ -27,8 +27,10 @@ def send_serienmailing_messages(
             message=build_email_message(
                 from_email=config.username,
                 to_email=mail.to_email,
+                cc_email=mail.cc_email,
                 subject=mail.subject,
                 html_body=mail.html_body,
+                attachments=mail.attachments,
                 attachment_bytes=mail.attachment_bytes,
                 attachment_filename=mail.attachment_filename,
             ),

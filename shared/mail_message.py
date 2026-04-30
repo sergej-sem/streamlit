@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from dataclasses import dataclass
 from email import utils as email_utils
 from email.message import EmailMessage
 from email.policy import SMTP
@@ -15,9 +16,16 @@ _MIME_MAP = {
     "png": ("image", "png"),
     "jpg": ("image", "jpeg"),
     "jpeg": ("image", "jpeg"),
+    "xls": ("application", "vnd.ms-excel"),
     "xlsx": ("application", "vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
     "docx": ("application", "vnd.openxmlformats-officedocument.wordprocessingml.document"),
 }
+
+
+@dataclass(frozen=True)
+class MailAttachment:
+    filename: str
+    content: bytes
 
 
 def _attachment_mime_type(filename: str) -> tuple[str, str]:
@@ -123,13 +131,27 @@ def build_email_message(
     html_body: str,
     plain_body: str | None = None,
     cc_email: str = "",
+    attachments: tuple[MailAttachment, ...] = (),
     attachment_bytes: bytes | None = None,
     attachment_filename: str | None = None,
 ) -> EmailMessage:
     normalized_from = _normalize_address_header(from_email, allow_multiple=False)
     normalized_to = _normalize_address_header(to_email, allow_multiple=True)
     normalized_cc = _normalize_address_header(cc_email, allow_multiple=True)
-    safe_attachment_filename = _sanitize_attachment_filename(attachment_filename) if attachment_filename else None
+    normalized_attachments: list[tuple[bytes, str]] = []
+    if attachment_bytes and attachment_filename:
+        normalized_attachments.append(
+            (
+                attachment_bytes,
+                _sanitize_attachment_filename(attachment_filename),
+            )
+        )
+    for attachment in attachments or ():
+        safe_filename = _sanitize_attachment_filename(getattr(attachment, "filename", None))
+        content = getattr(attachment, "content", None)
+        if not content or not safe_filename:
+            continue
+        normalized_attachments.append((content, safe_filename))
 
     message = EmailMessage(policy=SMTP)
     message["Subject"] = subject
@@ -152,10 +174,10 @@ def build_email_message(
         cte="quoted-printable",
     )
 
-    if attachment_bytes and safe_attachment_filename:
+    for content, safe_attachment_filename in normalized_attachments:
         maintype, subtype = _attachment_mime_type(safe_attachment_filename)
         message.add_attachment(
-            attachment_bytes,
+            content,
             maintype=maintype,
             subtype=subtype,
             filename=safe_attachment_filename,

@@ -7,7 +7,7 @@ import time
 from dataclasses import dataclass
 
 from shared.mail_errors import friendly_imap_draft_error, friendly_with_technical_hint
-from shared.mail_message import build_email_message_bytes
+from shared.mail_message import MailAttachment, build_email_message_bytes
 
 
 @dataclass(frozen=True)
@@ -27,6 +27,8 @@ class SerienMail:
     firma: str
     subject: str
     html_body: str
+    cc_email: str = ""
+    attachments: tuple[MailAttachment, ...] = ()
     attachment_bytes: bytes | None = None
     attachment_filename: str | None = None
 
@@ -45,8 +47,10 @@ def _build_message(mail: SerienMail, config: MailConfig) -> bytes:
     return build_email_message_bytes(
         from_email=config.username,
         to_email=mail.to_email,
+        cc_email=mail.cc_email,
         subject=mail.subject,
         html_body=mail.html_body,
+        attachments=mail.attachments,
         attachment_bytes=mail.attachment_bytes,
         attachment_filename=mail.attachment_filename,
     )
