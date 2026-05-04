@@ -5,7 +5,6 @@ from unittest.mock import patch
 
 from excel_druckbereit_generator.hubspot_fetch import (
     HISTORIE_PROPERTY,
-    HS_PROPERTIES,
     fetch_contacts_by_historien,
     load_historie_options,
 )
@@ -27,9 +26,11 @@ class LoadHistorieOptionsTests(unittest.TestCase):
 
 
 class FetchContactsByHistorienTests(unittest.TestCase):
+    DEFAULT_PROPERTIES = ["company", "firstname", "lastname", "expertenwissen", "vorqualifizierung"]
+
     @patch("excel_druckbereit_generator.hubspot_fetch.search_contacts_with_auto_split")
     def test_fetch_contacts_by_historien_returns_empty_list_for_empty_normalized_input(self, mock_search) -> None:
-        result = fetch_contacts_by_historien([" ", "", "\n"], token="abc")
+        result = fetch_contacts_by_historien([" ", "", "\n"], properties=self.DEFAULT_PROPERTIES, token="abc")
 
         self.assertEqual(result, [])
         mock_search.assert_not_called()
@@ -37,8 +38,9 @@ class FetchContactsByHistorienTests(unittest.TestCase):
     @patch("excel_druckbereit_generator.hubspot_fetch.search_contacts_with_auto_split")
     def test_fetch_contacts_by_historien_trims_and_deduplicates_input_preserving_order(self, mock_search) -> None:
         mock_search.return_value = [{"id": "1"}]
+        properties = ["company", "jobtitle", "firstname", "lastname", "hs_object_id"]
 
-        fetch_contacts_by_historien(["  A  ", "B", "A", "  ", "B", "C  "], token="abc")
+        fetch_contacts_by_historien(["  A  ", "B", "A", "  ", "B", "C  "], properties=properties, token="abc")
 
         mock_search.assert_called_once()
         filter_groups, properties = mock_search.call_args.args[:2]
@@ -46,18 +48,22 @@ class FetchContactsByHistorienTests(unittest.TestCase):
             [group["filters"][0]["value"] for group in filter_groups],
             ["A", "B", "C"],
         )
-        self.assertEqual(properties, HS_PROPERTIES)
+        self.assertEqual(properties, ["company", "jobtitle", "firstname", "lastname", "hs_object_id"])
         self.assertEqual(mock_search.call_args.kwargs["token"], "abc")
 
     @patch("excel_druckbereit_generator.hubspot_fetch.search_contacts_with_auto_split")
     def test_fetch_contacts_by_historien_builds_expected_filter_groups(self, mock_search) -> None:
         mock_search.return_value = [{"id": "1"}]
 
-        fetch_contacts_by_historien(["26DOR_TN", "26DOR_REF"], token="abc")
+        fetch_contacts_by_historien(
+            ["26DOR_TN", "26DOR_REF"],
+            properties=self.DEFAULT_PROPERTIES,
+            token="abc",
+        )
 
         filter_groups, properties = mock_search.call_args.args[:2]
         self.assertEqual(len(filter_groups), 2)
-        self.assertEqual(properties, HS_PROPERTIES)
+        self.assertEqual(properties, self.DEFAULT_PROPERTIES)
         self.assertEqual(
             filter_groups,
             [
@@ -88,6 +94,7 @@ class FetchContactsByHistorienTests(unittest.TestCase):
 
         fetch_contacts_by_historien(
             ["A", "B", "C"],
+            properties=self.DEFAULT_PROPERTIES,
             token="abc",
             initial_filtergroups_per_request=2,
         )
@@ -107,6 +114,7 @@ class FetchContactsByHistorienTests(unittest.TestCase):
 
         result = fetch_contacts_by_historien(
             ["A", "B", "C"],
+            properties=self.DEFAULT_PROPERTIES,
             token="abc",
             initial_filtergroups_per_request=2,
         )
@@ -119,6 +127,15 @@ class FetchContactsByHistorienTests(unittest.TestCase):
                 {"id": "3", "name": "third"},
             ],
         )
+
+    @patch("excel_druckbereit_generator.hubspot_fetch.search_contacts_with_auto_split")
+    def test_fetch_contacts_by_historien_passes_requested_properties_through(self, mock_search) -> None:
+        mock_search.return_value = [{"id": "1"}]
+        properties = ["company", "jobtitle", "firstname", "lastname", "hs_object_id"]
+
+        fetch_contacts_by_historien(["A"], properties=properties, token="abc")
+
+        self.assertEqual(mock_search.call_args.args[1], properties)
 
 
 if __name__ == "__main__":

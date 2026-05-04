@@ -10,13 +10,14 @@ from openpyxl.styles import Alignment, Border, Font, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.page import PageMargins
 
-EXCEL_HEADERS = [
+DEFAULT_EXCEL_HEADERS = [
     "Unternehmensname",
     "Vorname",
     "Nachname",
     "Expertenwissen",
     "Herausforderung",
 ]
+EXCEL_HEADERS = DEFAULT_EXCEL_HEADERS
 EXCEL_COLS = ["A", "B", "C", "D", "E"]
 
 DEFAULT_WIDTHS = {"A": 28, "B": 18, "C": 18, "D": 26, "E": 30}
@@ -102,7 +103,19 @@ def autofit_row_heights(ws, start_row: int, end_row: int, widths_final: dict[str
         )
 
 
-def build_excel_bytes(df: pd.DataFrame, list_title: str, widths: dict[str, float]) -> bytes:
+def build_excel_bytes(
+    df: pd.DataFrame,
+    list_title: str,
+    widths: dict[str, float],
+    *,
+    headers: list[str],
+) -> bytes:
+    if len(headers) != len(EXCEL_COLS):
+        raise ValueError(f"Expected {len(EXCEL_COLS)} headers, got {len(headers)}.")
+
+    export_headers = list(headers)
+    export_df = df.reindex(columns=export_headers)
+
     wb = Workbook()
     ws = wb.active
     ws.title = "Liste"
@@ -112,16 +125,16 @@ def build_excel_bytes(df: pd.DataFrame, list_title: str, widths: dict[str, float
     thin = Side(style="thin")
     border_all = Border(left=thin, right=thin, top=thin, bottom=thin)
 
-    ws.append(EXCEL_HEADERS)
+    ws.append(export_headers)
     ws.row_dimensions[1].height = HEADER_ROW_HEIGHT
 
-    for col_number in range(1, len(EXCEL_HEADERS) + 1):
+    for col_number in range(1, len(export_headers) + 1):
         cell = ws.cell(row=1, column=col_number)
         cell.font = header_font
         cell.alignment = wrap
         cell.border = border_all
 
-    for row in df.itertuples(index=False):
+    for row in export_df.itertuples(index=False):
         ws.append(list(row))
 
     max_row = ws.max_row

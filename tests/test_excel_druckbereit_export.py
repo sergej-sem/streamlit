@@ -57,7 +57,7 @@ class BuildExcelBytesTests(unittest.TestCase):
             columns=EXCEL_HEADERS,
         )
 
-        data = build_excel_bytes(df, "Eventliste", {"A": 42, "E": 16})
+        data = build_excel_bytes(df, "Eventliste", {"A": 42, "E": 16}, headers=EXCEL_HEADERS)
 
         self.assertTrue(data)
 
@@ -88,11 +88,39 @@ class BuildExcelBytesTests(unittest.TestCase):
             columns=EXCEL_HEADERS,
         )
 
-        data = build_excel_bytes(df, "", {"E": 10})
+        data = build_excel_bytes(df, "", {"E": 10}, headers=EXCEL_HEADERS)
         workbook = load_workbook(BytesIO(data))
         ws = workbook["Liste"]
 
         self.assertGreater(float(ws.row_dimensions[2].height), float(BASE_ROW_HEIGHT))
+
+    def test_build_excel_bytes_uses_custom_headers_in_requested_order(self) -> None:
+        custom_headers = [
+            "Unternehmensname",
+            "Jobtitel",
+            "Vorname",
+            "Nachname",
+            "Datensatz ID",
+        ]
+        df = pd.DataFrame(
+            [
+                {
+                    "Datensatz ID": "4711",
+                    "Nachname": "Lovelace",
+                    "Vorname": "Ada",
+                    "Jobtitel": "CTO",
+                    "Unternehmensname": "Acme GmbH",
+                }
+            ],
+            columns=["Datensatz ID", "Nachname", "Vorname", "Jobtitel", "Unternehmensname"],
+        )
+
+        data = build_excel_bytes(df, "Eventliste", {"B": 24}, headers=custom_headers)
+        workbook = load_workbook(BytesIO(data))
+        ws = workbook["Liste"]
+
+        self.assertEqual([ws.cell(1, i).value for i in range(1, 6)], custom_headers)
+        self.assertEqual([ws.cell(2, i).value for i in range(1, 6)], ["Acme GmbH", "CTO", "Ada", "Lovelace", "4711"])
 
 
 if __name__ == "__main__":

@@ -5,7 +5,8 @@ from typing import Iterable
 from shared.hubspot import fetch_property_options, search_contacts_with_auto_split
 
 HISTORIE_PROPERTY = "historie"
-HS_PROPERTIES = ["company", "firstname", "lastname", "expertenwissen", "vorqualifizierung"]
+DEFAULT_HS_PROPERTIES = ["company", "firstname", "lastname", "expertenwissen", "vorqualifizierung"]
+HS_PROPERTIES = DEFAULT_HS_PROPERTIES
 INITIAL_FILTERGROUPS_PER_REQUEST = 5
 
 
@@ -60,6 +61,7 @@ def load_historie_options(*, token: str) -> list[tuple[str, str]]:
 def fetch_contacts_by_historien(
     historie_values: list[str],
     *,
+    properties: list[str],
     token: str,
     initial_filtergroups_per_request: int = INITIAL_FILTERGROUPS_PER_REQUEST,
 ) -> list[dict]:
@@ -73,7 +75,7 @@ def fetch_contacts_by_historien(
         filter_groups = _build_historie_filter_groups(batch)
         results = search_contacts_with_auto_split(
             filter_groups,
-            HS_PROPERTIES,
+            properties,
             token=token,
         )
         _update_results_by_id(results_by_id, results)

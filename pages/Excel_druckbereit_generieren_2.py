@@ -1,8 +1,4 @@
-# pages/01_Excel_druckbereit_generieren.py
-# Streamlit: HubSpot -> Excel (druckfertig) mit Template-Spaltenbreiten + Titel im Seitenkopf
-# + Multi-Select (mehrere Historien)
-# + Robust gegen HubSpot-Limits (auto split bei 400)
-# + Seitenzahl unten (Footer): "Seite X von Y"
+# Streamlit: HubSpot -> Excel (druckfertig), Variante 2
 
 import os
 import re
@@ -13,23 +9,33 @@ import requests
 import streamlit as st
 
 from excel_druckbereit_generator.export import (
-    EXCEL_HEADERS,
     build_excel_bytes,
     read_widths_from_excel_bytes,
     sanitize_filename,
 )
 from excel_druckbereit_generator.hubspot_fetch import (
-    HS_PROPERTIES,
     fetch_contacts_by_historien,
     load_historie_options,
 )
 from shared.config import ConfigError, get_hubspot_token
 from streamlit_ui import render_page_title
 
+EXPORT_HEADERS = [
+    "Unternehmensname",
+    "Jobtitel",
+    "Vorname",
+    "Nachname",
+    "Datensatz ID",
+]
+HUBSPOT_PROPERTIES = ["company", "jobtitle", "firstname", "lastname", "hs_object_id"]
 
-# ----------------------------
-# HubSpot Helpers (Requests)
-# ----------------------------
+
+def _clean_text(value: object) -> str:
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
 def get_access_token() -> str:
     try:
         return get_hubspot_token(getattr(st, "secrets", None), os.environ)
@@ -51,11 +57,8 @@ def fetch_historie_options() -> List[Tuple[str, str]]:
         return []
 
 
-# ----------------------------
-# Streamlit UI
-# ----------------------------
-st.set_page_config(page_title="HubSpot -> Druck-Excel", layout="wide")
-render_page_title("HubSpot → Excel Export (druckfertig)")
+st.set_page_config(page_title="HubSpot -> Druck-Excel 2", layout="wide")
+render_page_title("HubSpot → Excel Export (druckfertig) 2")
 
 options = fetch_historie_options()
 
@@ -75,7 +78,7 @@ if not options:
     historie_values_selected = [x.strip() for x in re.split(r"[,\n;]+", raw) if x.strip()]
     historie_labels_selected = historie_values_selected[:]
 else:
-    labels = [o[0] for o in options]
+    labels = [option[0] for option in options]
     label_to_value = {label: value for label, value in options}
 
     historie_labels_selected = st.multiselect(
@@ -83,9 +86,8 @@ else:
         options=labels,
         default=[],
     )
-    historie_values_selected = [label_to_value[lbl] for lbl in historie_labels_selected]
+    historie_values_selected = [label_to_value[label] for label in historie_labels_selected]
 
-# Default Titel (aus den ersten 3 Historien)
 if historie_labels_selected:
     default_title = ", ".join(historie_labels_selected[:3])
     if len(historie_labels_selected) > 3:
@@ -110,14 +112,14 @@ if st.button("Excel erstellen", type="primary", disabled=disabled_btn):
         with st.spinner("Lade Daten aus HubSpot..."):
             contacts = fetch_contacts_by_historien(
                 historie_values_selected,
-                properties=HS_PROPERTIES,
+                properties=HUBSPOT_PROPERTIES,
                 token=get_access_token(),
             )
-    except requests.HTTPError as e:
-        st.error("HubSpot API Fehler.\n\n" + str(e))
+    except requests.HTTPError as error:
+        st.error("HubSpot API Fehler.\n\n" + str(error))
         st.stop()
-    except Exception as e:
-        st.error(f"Unerwarteter Fehler: {e}")
+    except Exception as error:
+        st.error(f"Unerwarteter Fehler: {error}")
         st.stop()
 
     if not contacts:
@@ -125,21 +127,21 @@ if st.button("Excel erstellen", type="primary", disabled=disabled_btn):
         st.stop()
 
     rows = []
-    for c in contacts:
-        p = c.get("properties", {}) or {}
+    for contact in contacts:
+        properties = contact.get("properties", {}) or {}
+        dataset_id = _clean_text(properties.get("hs_object_id")) or _clean_text(contact.get("id"))
         rows.append(
             {
-                "Unternehmensname": (p.get("company") or "").strip(),
-                "Vorname": (p.get("firstname") or "").strip(),
-                "Nachname": (p.get("lastname") or "").strip(),
-                "Expertenwissen": (p.get("expertenwissen") or "").strip(),
-                "Herausforderung": (p.get("vorqualifizierung") or "").strip(),
+                "Unternehmensname": _clean_text(properties.get("company")),
+                "Jobtitel": _clean_text(properties.get("jobtitle")),
+                "Vorname": _clean_text(properties.get("firstname")),
+                "Nachname": _clean_text(properties.get("lastname")),
+                "Datensatz ID": dataset_id,
             }
         )
 
-    df = pd.DataFrame(rows, columns=EXCEL_HEADERS)
+    df = pd.DataFrame(rows, columns=EXPORT_HEADERS)
 
-    # Sortierung nach Unternehmensname A-Z (case-insensitive)
     df["__sort_company"] = df["Unternehmensname"].fillna("").str.lower()
     df = df.sort_values("__sort_company", ascending=True).drop(columns=["__sort_company"])
 
@@ -147,7 +149,7 @@ if st.button("Excel erstellen", type="primary", disabled=disabled_btn):
     if template_file is not None:
         widths = read_widths_from_excel_bytes(template_file.getvalue())
 
-    excel_bytes = build_excel_bytes(df, list_title_input, widths, headers=EXCEL_HEADERS)
+    excel_bytes = build_excel_bytes(df, list_title_input, widths, headers=EXPORT_HEADERS)
 
     filename = f"{sanitize_filename(list_title_input or 'export')}.xlsx"
     st.success(f"Fertig. Kontakte: {len(df)}")
