@@ -1,14 +1,21 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
 
 from serienmailing.eventende import (
-    UploadedAttachmentFile,
+    DEFAULT_GESPRAECHSPLAENE_DIR,
+    DEFAULT_KONTAKTLISTE_PATH,
+    DEFAULT_KONTAKTLISTE_PASSWORD,
+    DEFAULT_VORTRAGSLISTEN_DIR,
+    DEFAULT_WORKBOOK_PATH,
     assemble_eventende_sponsors,
     build_eventende_serienmails,
     build_eventende_summary_dataframe,
+    inspect_eventende_sources,
 )
 from serienmailing.imap_sender import MailConfig, create_serienmailing_drafts
 from serienmailing.mail_builder import SENDER_EMAIL_SUGGESTIONS, build_subject
@@ -19,15 +26,10 @@ from serienmailing.ui_helpers import (
     default_mail_body_html_value,
     default_subject_template,
     missing_preview_requirements,
-    preview_ready,
     reset_confirmation_state,
     summarize_mail_results,
 )
-from shared.config import (
-    ConfigError,
-    load_imap_draft_settings,
-    load_smtp_send_settings,
-)
+from shared.config import ConfigError, load_imap_draft_settings, load_smtp_send_settings
 from shared.email_validation import is_valid_email_address
 from shared.imap_append import ImapAppendConfig
 from shared.mail_content_guard import (
@@ -114,30 +116,33 @@ def _reset_confirmation_input() -> None:
     reset_confirmation_state(st.session_state)
 
 
-def _make_uploaded_attachment(uploaded_file) -> UploadedAttachmentFile | None:
-    if uploaded_file is None:
-        return None
-    return UploadedAttachmentFile(name=uploaded_file.name, content=uploaded_file.getvalue())
-
-
-def _make_uploaded_attachment_list(uploaded_files) -> tuple[UploadedAttachmentFile, ...]:
-    return tuple(
-        UploadedAttachmentFile(name=uploaded_file.name, content=uploaded_file.getvalue())
-        for uploaded_file in (uploaded_files or [])
-    )
-
-
 def _preview_label(sponsor) -> str:
     status = "Bereit" if sponsor.is_ready else "Blockiert"
     return f"{sponsor.sponsor_name} ({sponsor.package}) - {sponsor.to_email} - {status}"
+
+
+def _status_label(exists: bool, count: int | None = None) -> str:
+    if count is None:
+        return "Gefunden" if exists else "Fehlt"
+    if not exists:
+        return "Fehlt"
+    return f"Gefunden ({count})"
+
+
+def _path_display(path: Path) -> str:
+    try:
+        return str(path.relative_to(Path.cwd()))
+    except ValueError:
+        return str(path)
 
 
 _init_state()
 
 render_page_title("Serienmailing Eventende")
 st.caption(
-    "Sponsoren-Datei und Eventende-Unterlagen hochladen, Zuordnung prüfen und die Mails anschließend als Entwurf speichern oder senden."
+    "Sponsoren-Datei und Eventende-Unterlagen werden automatisch aus dem Repo geladen. Prüfe die Zuordnung und speichere die Mails anschließend als Entwurf oder sende sie direkt."
 )
+st.caption(f"Die Kontaktliste wird vor dem Versand als passwortgeschützte Excel-Datei mit dem Passwort `{DEFAULT_KONTAKTLISTE_PASSWORD}` angehängt.")
 
 imap_host, imap_port, imap_folder, imap_sent_folder, imap_ssl = _load_imap_defaults()
 smtp_host, smtp_port, smtp_use_ssl, smtp_use_starttls, smtp_timeout = _load_smtp_defaults()
@@ -156,59 +161,82 @@ if sender_email and not is_valid_email_address(sender_email):
     st.warning("Bitte gib eine gültige Absenderadresse ein.")
 
 st.divider()
-render_section_title("Dateien")
+render_section_title("Dateiquellen")
 
-workbook_upload = st.file_uploader(
-    "Sponsoren-Excel hochladen",
-    type=["xlsx"],
-    key="sme_workbook_upload",
-    help="Bitte die aktuelle 00_Master_Sponsoren_Infos.xlsx hochladen. Verarbeitet wird das Blatt `Deals`.",
-)
-kontaktliste_upload = st.file_uploader(
-    "Kontaktliste hochladen",
-    type=["xlsx", "xls"],
-    key="sme_kontaktliste_upload",
-    help="Diese Datei wird an alle Premium-, Gold- und Platin-Sponsoren angehängt.",
-)
-gespraechsplan_uploads = st.file_uploader(
-    "Gesprächspläne hochladen",
-    type=["xlsx", "xls", "pdf"],
-    accept_multiple_files=True,
-    key="sme_gespraechsplan_uploads",
-    help="Erwartete Nomenklatur: Sponsorenname_Gesprächsplan.xlsx/.xls für Premium, Sponsorenname_Gesprächsplan.pdf für Gold/Platin.",
-)
-vortragsliste_uploads = st.file_uploader(
-    "Vortragslisten hochladen",
-    type=["xlsx", "xls"],
-    accept_multiple_files=True,
-    key="sme_vortragsliste_uploads",
-    help="Erwartete Nomenklatur: Sponsorenname_Vortragsliste.xlsx/.xls. Nur für Gold/Platin erforderlich.",
+source_status = inspect_eventende_sources()
+status_df = pd.DataFrame(
+    [
+        {
+            "Quelle": "Sponsoren-Excel",
+            "Pfad": _path_display(source_status.workbook_path),
+            "Status": _status_label(source_status.workbook_exists),
+        },
+        {
+            "Quelle": "Kontaktliste",
+            "Pfad": _path_display(source_status.kontaktliste_path),
+            "Status": _status_label(source_status.kontaktliste_exists),
+        },
+        {
+            "Quelle": "Gesprächspläne",
+            "Pfad": _path_display(source_status.gespraechsplaene_dir),
+            "Status": _status_label(
+                source_status.gespraechsplaene_exists,
+                source_status.gespraechsplaene_count,
+            ),
+        },
+        {
+            "Quelle": "Vortragslisten",
+            "Pfad": _path_display(source_status.vortragslisten_dir),
+            "Status": _status_label(
+                source_status.vortragslisten_exists,
+                source_status.vortragslisten_count,
+            ),
+        },
+    ]
 )
 
-if workbook_upload is None:
-    st.info("Bitte zuerst die Sponsoren-Excel hochladen.")
+if not source_status.workbook_exists:
+    st.error(
+        f"Die Sponsoren-Datei wurde nicht gefunden: `{_path_display(DEFAULT_WORKBOOK_PATH)}`"
+    )
     st.stop()
 
 try:
-    assembly_result = assemble_eventende_sponsors(
-        excel_bytes=workbook_upload.getvalue(),
-        kontaktliste=_make_uploaded_attachment(kontaktliste_upload),
-        gespraechsplan_files=_make_uploaded_attachment_list(gespraechsplan_uploads),
-        vortragsliste_files=_make_uploaded_attachment_list(vortragsliste_uploads),
-    )
+    assembly_result = assemble_eventende_sponsors()
 except Exception as exc:
     st.error(
         friendly_with_technical_hint(
-            "Die Sponsoren-Datei oder die Uploads konnten nicht verarbeitet werden.",
+            "Die Eventende-Dateien konnten nicht verarbeitet werden.",
             exc,
         )
     )
     st.stop()
 
 if not assembly_result.sponsors:
-    st.warning("In der Datei wurden keine aktiven Sponsoren mit Paket Premium, Gold oder Platin und E-Mail-Adresse gefunden.")
+    st.warning(
+        "In der Datei wurden keine aktiven Sponsoren mit Paket Premium, Gold oder Platin und E-Mail-Adresse gefunden."
+    )
     st.stop()
-
+status_df = pd.concat(
+    [
+        status_df,
+        pd.DataFrame(
+            [
+                {
+                    "Quelle": "Kontaktliste-Passwortschutz",
+                    "Pfad": _path_display(source_status.kontaktliste_path),
+                    "Status": "OK" if assembly_result.kontaktliste_protected else "Fehler",
+                }
+            ]
+        ),
+    ],
+    ignore_index=True,
+)
+st.dataframe(status_df, use_container_width=True, hide_index=True)
+if assembly_result.kontaktliste_protected:
+    st.success(assembly_result.kontaktliste_protection_details)
+else:
+    st.error(assembly_result.kontaktliste_protection_details)
 summary_df = build_eventende_summary_dataframe(assembly_result.sponsors)
 sponsor_by_row = {sponsor.row_number: sponsor for sponsor in assembly_result.sponsors}
 all_sponsor_rows = list(sponsor_by_row.keys())
@@ -217,7 +245,8 @@ ready_sponsor_set = set(ready_sponsor_rows)
 
 st.caption(
     f"{len(assembly_result.sponsors)} relevante Sponsoren gefunden. "
-    f"{assembly_result.ready_count} bereit, {assembly_result.blocked_count} blockiert, {assembly_result.skipped_count} übersprungen."
+    f"{assembly_result.ready_count} bereit, {assembly_result.blocked_count} blockiert, "
+    f"{assembly_result.skipped_count} übersprungen."
 )
 st.dataframe(summary_df, use_container_width=True, hide_index=True)
 
@@ -249,7 +278,15 @@ mail_body_html = render_mail_rich_text_editor(
 )
 
 preview_contacts = pd.DataFrame(
-    [{"vorname": sponsor.contact_first_name, "firma": sponsor.sponsor_name, "email": sponsor.to_email} for sponsor in assembly_result.sponsors if sponsor.is_ready]
+    [
+        {
+            "vorname": sponsor.contact_first_name,
+            "firma": sponsor.sponsor_name,
+            "email": sponsor.to_email,
+        }
+        for sponsor in assembly_result.sponsors
+        if sponsor.is_ready
+    ]
 )
 preview_missing = missing_preview_requirements(
     sender_email=sender_email,
@@ -301,7 +338,9 @@ else:
 if preview_body:
     components.html(preview_body, height=420, scrolling=True)
     preview_assessment = assess_html_mail_content(preview_subject, preview_body)
-    _show_guard_feedback(evaluate_send_guard(st.session_state.get("sme_mail_mode", _MAIL_MODE_OPTIONS[0]), preview_assessment))
+    _show_guard_feedback(
+        evaluate_send_guard(st.session_state.get("sme_mail_mode", _MAIL_MODE_OPTIONS[0]), preview_assessment)
+    )
 
 st.divider()
 render_section_title("Versand")

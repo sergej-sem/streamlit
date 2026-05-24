@@ -1,8 +1,11 @@
 from __future__ import annotations
 
-import io
 import re
+import subprocess
+import tempfile
+import textwrap
 import unicodedata
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -16,7 +19,14 @@ from serienmailing.imap_sender import SerienMail
 from serienmailing.mail_builder import build_subject
 
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_SHEET_NAME = "Deals"
+DEFAULT_WORKBOOK_PATH = PROJECT_ROOT / "00_Master_Sponsoren_Infos.xlsx"
+DEFAULT_KONTAKTLISTE_PATH = PROJECT_ROOT / "Kontaktliste.xlsx"
+DEFAULT_GESPRAECHSPLAENE_DIR = PROJECT_ROOT / "Gespr\u00e4chspl\u00e4ne"
+DEFAULT_VORTRAGSLISTEN_DIR = PROJECT_ROOT / "Vortragslisten"
+DEFAULT_KONTAKTLISTE_PASSWORD = "MSEukf6dd"
+
 SUPPORTED_PACKAGES = {"premium": "Premium", "gold": "Gold", "platin": "Platin"}
 PREMIUM_KEY = "premium"
 GOLD_KEY = "gold"
@@ -24,21 +34,31 @@ PLATIN_KEY = "platin"
 
 _TRANSLITERATION_MAP = str.maketrans(
     {
-        "ä": "ae",
-        "ö": "oe",
-        "ü": "ue",
-        "ß": "ss",
-        "Ä": "Ae",
-        "Ö": "Oe",
-        "Ü": "Ue",
+        "\u00e4": "ae",
+        "\u00f6": "oe",
+        "\u00fc": "ue",
+        "\u00df": "ss",
+        "\u00c4": "Ae",
+        "\u00d6": "Oe",
+        "\u00dc": "Ue",
     }
 )
+_GESPRAECHSPLAN_SUFFIXES = ("gespraechsplan", "gesprachsplan")
+_VORTRAGSLISTE_SUFFIXES = ("vortragsliste",)
 
 
 @dataclass(frozen=True)
-class UploadedAttachmentFile:
-    name: str
-    content: bytes
+class EventEndSourceStatus:
+    workbook_path: Path
+    workbook_exists: bool
+    kontaktliste_path: Path
+    kontaktliste_exists: bool
+    gespraechsplaene_dir: Path
+    gespraechsplaene_exists: bool
+    gespraechsplaene_count: int
+    vortragslisten_dir: Path
+    vortragslisten_exists: bool
+    vortragslisten_count: int
 
 
 @dataclass(frozen=True)
@@ -70,6 +90,16 @@ class EventEndAssemblyResult:
     ready_count: int
     blocked_count: int
     skipped_count: int
+    kontaktliste_protected: bool
+    kontaktliste_protection_details: str
+
+
+@dataclass(frozen=True)
+class _LoadedAttachmentFile:
+    name: str
+    content: bytes
+    ext: str
+    stem_key: str
 
 
 def normalize_attachment_key(value: str) -> str:
@@ -84,58 +114,207 @@ def normalize_attachment_key(value: str) -> str:
     return re.sub(r"_+", "_", text).strip("_")
 
 
-def _file_ext(name: str) -> str:
-    return Path(name).suffix.lower()
+def inspect_eventende_sources(
+    *,
+    workbook_path: Path = DEFAULT_WORKBOOK_PATH,
+    kontaktliste_path: Path = DEFAULT_KONTAKTLISTE_PATH,
+    gespraechsplaene_dir: Path = DEFAULT_GESPRAECHSPLAENE_DIR,
+    vortragslisten_dir: Path = DEFAULT_VORTRAGSLISTEN_DIR,
+) -> EventEndSourceStatus:
+    return EventEndSourceStatus(
+        workbook_path=workbook_path,
+        workbook_exists=workbook_path.is_file(),
+        kontaktliste_path=kontaktliste_path,
+        kontaktliste_exists=kontaktliste_path.is_file(),
+        gespraechsplaene_dir=gespraechsplaene_dir,
+        gespraechsplaene_exists=gespraechsplaene_dir.is_dir(),
+        gespraechsplaene_count=_count_files(gespraechsplaene_dir),
+        vortragslisten_dir=vortragslisten_dir,
+        vortragslisten_exists=vortragslisten_dir.is_dir(),
+        vortragslisten_count=_count_files(vortragslisten_dir),
+    )
 
 
-def _file_stem_key(name: str) -> str:
-    return normalize_attachment_key(Path(name).stem)
+def _count_files(path: Path) -> int:
+    if not path.is_dir():
+        return 0
+    return sum(1 for file_path in path.iterdir() if file_path.is_file())
+
+
+def _powershell_quote(value: str) -> str:
+    return "'" + str(value).replace("'", "''") + "'"
+
+
+def _protect_excel_file_with_excel_com(source_path: Path, target_path: Path, password: str) -> None:
+    script = textwrap.dedent(
+        f"""
+        $ErrorActionPreference = 'Stop'
+        $src = {_powershell_quote(str(source_path))}
+        $dst = {_powershell_quote(str(target_path))}
+        $password = {_powershell_quote(password)}
+        $excel = $null
+        $workbook = $null
+        try {{
+            $excel = New-Object -ComObject Excel.Application
+            $excel.Visible = $false
+            $excel.DisplayAlerts = $false
+            $workbook = $excel.Workbooks.Open($src)
+            $workbook.SaveAs($dst, 51, $password)
+        }} finally {{
+            if ($workbook -ne $null) {{
+                try {{ $workbook.Close($false) | Out-Null }} catch {{}}
+                [System.Runtime.Interopservices.Marshal]::ReleaseComObject($workbook) | Out-Null
+            }}
+            if ($excel -ne $null) {{
+                try {{ $excel.Quit() | Out-Null }} catch {{}}
+                [System.Runtime.Interopservices.Marshal]::ReleaseComObject($excel) | Out-Null
+            }}
+        }}
+        """
+    ).strip()
+    result = subprocess.run(
+        ["powershell", "-NoProfile", "-Command", script],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip() or "Unbekannter Excel-Fehler."
+        raise RuntimeError(detail)
+
+
+def build_password_protected_excel_attachment(
+    source_path: Path,
+    password: str = DEFAULT_KONTAKTLISTE_PASSWORD,
+    *,
+    protector: Callable[[Path, Path, str], None] | None = None,
+) -> MailAttachment:
+    if not source_path.is_file():
+        raise FileNotFoundError(f"Kontaktliste nicht gefunden: {source_path}")
+
+    protect = protector or _protect_excel_file_with_excel_com
+    with tempfile.TemporaryDirectory() as tmpdir:
+        protected_path = Path(tmpdir) / source_path.name
+        protect(source_path, protected_path, password)
+        if not protected_path.is_file():
+            raise RuntimeError("Die verschlüsselte Kontaktliste wurde nicht erzeugt.")
+        return MailAttachment(filename=source_path.name, content=protected_path.read_bytes())
+
+
+def _load_attachment_dir(path: Path) -> tuple[_LoadedAttachmentFile, ...]:
+    if not path.is_dir():
+        return ()
+    files = []
+    for file_path in sorted(path.iterdir(), key=lambda item: item.name.casefold()):
+        if not file_path.is_file():
+            continue
+        files.append(
+            _LoadedAttachmentFile(
+                name=file_path.name,
+                content=file_path.read_bytes(),
+                ext=file_path.suffix.lower(),
+                stem_key=normalize_attachment_key(file_path.stem),
+            )
+        )
+    return tuple(files)
 
 
 def _package_key(value: str) -> str:
     return normalize_text(value).casefold()
 
 
-def _expected_stem(sponsor_name: str, suffix: str) -> str:
-    return normalize_attachment_key(f"{sponsor_name}_{suffix}")
+def _strip_suffix(stem_key: str, suffixes: tuple[str, ...]) -> str:
+    for suffix in suffixes:
+        if stem_key == suffix:
+            return ""
+        marker = f"_{suffix}"
+        if stem_key.endswith(marker):
+            return stem_key[: -len(marker)]
+    return stem_key
 
 
-def _resolve_named_attachment(
+def _tokens(key: str) -> list[str]:
+    return [token for token in key.split("_") if token]
+
+
+def _tokens_match_prefix(shorter: list[str], longer: list[str]) -> bool:
+    if not shorter or len(shorter) > len(longer):
+        return False
+    return all(
+        longer[index].startswith(shorter[index]) or shorter[index].startswith(longer[index])
+        for index in range(len(shorter))
+    )
+
+
+def _keys_match(sponsor_key: str, file_key: str) -> bool:
+    if not sponsor_key or not file_key:
+        return False
+    if sponsor_key == file_key:
+        return True
+    if sponsor_key.startswith(file_key + "_") or file_key.startswith(sponsor_key + "_"):
+        return True
+
+    sponsor_tokens = _tokens(sponsor_key)
+    file_tokens = _tokens(file_key)
+    if len(sponsor_tokens) <= len(file_tokens):
+        return _tokens_match_prefix(sponsor_tokens, file_tokens)
+    return _tokens_match_prefix(file_tokens, sponsor_tokens)
+
+
+def _matching_attachments(
     sponsor_name: str,
-    suffix: str,
-    files: tuple[UploadedAttachmentFile, ...],
+    files: tuple[_LoadedAttachmentFile, ...],
+    *,
+    suffixes: tuple[str, ...],
     allowed_exts: tuple[str, ...],
-    label: str,
-) -> tuple[MailAttachment | None, str | None]:
-    expected = _expected_stem(sponsor_name, suffix)
-    matches = [
-        file
-        for file in files
-        if _file_ext(file.name) in allowed_exts and _file_stem_key(file.name) == expected
-    ]
-    if not matches:
-        allowed_text = ", ".join(ext.lstrip(".") for ext in allowed_exts)
-        return None, f"{label} fehlt ({sponsor_name}_{suffix}.{allowed_text})."
-    if len(matches) > 1:
-        names = ", ".join(file.name for file in matches)
-        return None, f"{label} ist nicht eindeutig: {names}."
-    match = matches[0]
-    return MailAttachment(filename=match.name, content=match.content), None
+) -> tuple[MailAttachment, ...]:
+    sponsor_key = normalize_attachment_key(sponsor_name)
+    matches: list[MailAttachment] = []
+    for file in files:
+        if file.ext not in allowed_exts:
+            continue
+        file_key = _strip_suffix(file.stem_key, suffixes)
+        if _keys_match(sponsor_key, file_key):
+            matches.append(MailAttachment(filename=file.name, content=file.content))
+    matches.sort(key=lambda attachment: attachment.filename.casefold())
+    return tuple(matches)
 
 
 def assemble_eventende_sponsors(
     *,
-    excel_bytes: bytes,
-    kontaktliste: UploadedAttachmentFile | None,
-    gespraechsplan_files: tuple[UploadedAttachmentFile, ...],
-    vortragsliste_files: tuple[UploadedAttachmentFile, ...],
+    workbook_path: Path = DEFAULT_WORKBOOK_PATH,
+    kontaktliste_path: Path = DEFAULT_KONTAKTLISTE_PATH,
+    gespraechsplaene_dir: Path = DEFAULT_GESPRAECHSPLAENE_DIR,
+    vortragslisten_dir: Path = DEFAULT_VORTRAGSLISTEN_DIR,
     sheet_name: str = DEFAULT_SHEET_NAME,
+    kontaktliste_password: str = DEFAULT_KONTAKTLISTE_PASSWORD,
+    kontaktliste_attachment_builder: Callable[[Path, str], MailAttachment] | None = None,
 ) -> EventEndAssemblyResult:
-    workbook = load_workbook(io.BytesIO(excel_bytes), data_only=False)
+    if not workbook_path.is_file():
+        raise FileNotFoundError(f"Sponsoren-Datei nicht gefunden: {workbook_path}")
+
+    kontaktliste: MailAttachment | None = None
+    kontaktliste_protected = False
+    kontaktliste_protection_details = ""
+    builder = kontaktliste_attachment_builder or build_password_protected_excel_attachment
+    if not kontaktliste_path.is_file():
+        kontaktliste_protection_details = "Kontaktliste fehlt."
+    else:
+        try:
+            kontaktliste = builder(kontaktliste_path, kontaktliste_password)
+            kontaktliste_protected = True
+            kontaktliste_protection_details = "Kontaktliste erfolgreich verschlüsselt."
+        except Exception as exc:
+            kontaktliste_protection_details = f"Kontaktliste-Verschlüsselung fehlgeschlagen: {exc}"
+
+    gespraechsplaene = _load_attachment_dir(gespraechsplaene_dir)
+    vortragslisten = _load_attachment_dir(vortragslisten_dir)
+
+    workbook = load_workbook(workbook_path, data_only=False)
     try:
         if sheet_name not in workbook.sheetnames:
             raise ValueError(
-                f"Blatt '{sheet_name}' nicht gefunden. Verfügbar: {', '.join(workbook.sheetnames)}"
+                f"Blatt '{sheet_name}' nicht gefunden. Verf\u00fcgbar: {', '.join(workbook.sheetnames)}"
             )
 
         ws = workbook[sheet_name]
@@ -158,49 +337,33 @@ def assemble_eventende_sponsors(
             issues: list[str] = []
             attachments: list[MailAttachment] = []
 
-            if kontaktliste is None:
-                issues.append("Kontaktliste fehlt.")
+            if not kontaktliste_protected or kontaktliste is None:
+                issues.append(kontaktliste_protection_details or "Kontaktliste fehlt.")
             else:
-                attachments.append(
-                    MailAttachment(filename=kontaktliste.name, content=kontaktliste.content)
-                )
+                attachments.append(kontaktliste)
 
-            if package_key == PREMIUM_KEY:
-                attachment, issue = _resolve_named_attachment(
-                    sponsor.sponsor_name,
-                    "Gesprächsplan",
-                    gespraechsplan_files,
-                    (".xlsx", ".xls"),
-                    "Gesprächsplan",
-                )
-                if issue:
-                    issues.append(issue)
-                elif attachment is not None:
-                    attachments.append(attachment)
-            elif package_key in {GOLD_KEY, PLATIN_KEY}:
-                attachment, issue = _resolve_named_attachment(
-                    sponsor.sponsor_name,
-                    "Gesprächsplan",
-                    gespraechsplan_files,
-                    (".pdf",),
-                    "Gesprächsplan",
-                )
-                if issue:
-                    issues.append(issue)
-                elif attachment is not None:
-                    attachments.append(attachment)
+            matched_gespraechsplaene = _matching_attachments(
+                sponsor.sponsor_name,
+                gespraechsplaene,
+                suffixes=_GESPRAECHSPLAN_SUFFIXES,
+                allowed_exts=(".pdf",),
+            )
+            if not matched_gespraechsplaene:
+                issues.append("Gespr\u00e4chsplan fehlt.")
+            else:
+                attachments.extend(matched_gespraechsplaene)
 
-                attachment, issue = _resolve_named_attachment(
+            if package_key in {GOLD_KEY, PLATIN_KEY}:
+                matched_vortragslisten = _matching_attachments(
                     sponsor.sponsor_name,
-                    "Vortragsliste",
-                    vortragsliste_files,
-                    (".xlsx", ".xls"),
-                    "Vortragsliste",
+                    vortragslisten,
+                    suffixes=_VORTRAGSLISTE_SUFFIXES,
+                    allowed_exts=(".pdf",),
                 )
-                if issue:
-                    issues.append(issue)
-                elif attachment is not None:
-                    attachments.append(attachment)
+                if not matched_vortragslisten:
+                    issues.append("Vortragsliste fehlt.")
+                else:
+                    attachments.extend(matched_vortragslisten)
 
             sponsors.append(
                 EventEndSponsorPlan(
@@ -225,6 +388,8 @@ def assemble_eventende_sponsors(
             ready_count=ready_count,
             blocked_count=blocked_count,
             skipped_count=max(candidate_rows - len(sponsors), 0),
+            kontaktliste_protected=kontaktliste_protected,
+            kontaktliste_protection_details=kontaktliste_protection_details,
         )
     finally:
         workbook.close()
@@ -276,7 +441,7 @@ def build_eventende_summary_dataframe(
             "Paket": sponsor.package,
             "E-Mail": sponsor.to_email,
             "Kopie": sponsor.cc_email or "-",
-            "Anhänge": " | ".join(sponsor.attachment_names) or "-",
+            "Anh\u00e4nge": " | ".join(sponsor.attachment_names) or "-",
             "Status": "Bereit" if sponsor.is_ready else "Blockiert",
             "Hinweis": sponsor.details or "-",
         }
@@ -284,5 +449,5 @@ def build_eventende_summary_dataframe(
     ]
     return pd.DataFrame(
         rows,
-        columns=["Sponsor", "Paket", "E-Mail", "Kopie", "Anhänge", "Status", "Hinweis"],
+        columns=["Sponsor", "Paket", "E-Mail", "Kopie", "Anh\u00e4nge", "Status", "Hinweis"],
     )

@@ -157,7 +157,7 @@ lang_label = st.radio("PDF Sprache", ["Deutsch", "English"], horizontal=True)
 lang = "de" if lang_label == "Deutsch" else "en"
 
 # --- Stadt ---
-city_label = st.selectbox("Stadt", ["Berlin", "Dortmund", "München"])
+city_label = st.selectbox("Stadt", ["Berlin", "Dortmund", "München"], index=2)
 city_code = {"Berlin": "BER", "Dortmund": "DOR", "München": "MUC"}[city_label]
 
 # --- Templates je Stadt + Sprache ---
