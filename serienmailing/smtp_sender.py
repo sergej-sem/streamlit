@@ -52,6 +52,7 @@ def send_serienmailing_messages(
             subject=mail.subject,
             status=result.status,
             details=result.details,
+            cc_email=mail.cc_email,
         )
         for mail, result in zip(mails, smtp_results)
     ]

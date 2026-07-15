@@ -41,6 +41,7 @@ class SerienMailResult:
     subject: str
     status: str   # "draft_created" | "sent" | "error"
     details: str
+    cc_email: str = ""
 
 
 def _build_message(mail: SerienMail, config: MailConfig) -> bytes:
@@ -120,6 +121,7 @@ def create_serienmailing_drafts(
                     subject=mail.subject,
                     status="draft_created",
                     details="",
+                    cc_email=mail.cc_email,
                 ))
             except Exception as exc:
                 results.append(SerienMailResult(
@@ -129,6 +131,7 @@ def create_serienmailing_drafts(
                     subject=mail.subject,
                     status="error",
                     details=_friendly_imap_error(str(exc)),
+                    cc_email=mail.cc_email,
                 ))
     finally:
         try:

@@ -114,13 +114,14 @@ class SendSerienmailingMessagesTests(unittest.TestCase):
                 MailAttachment(filename="vortragsliste.xlsx", content=b"PKfake"),
             ),
         )
-        send_serienmailing_messages([mail], _make_config())
+        results = send_serienmailing_messages([mail], _make_config())
 
         prepared_messages, _ = mock_send.call_args[0]
         payload = prepared_messages[0].message.as_string()
         self.assertIn("copy@example.com", payload)
         self.assertIn("gespraechsplan.pdf", payload)
         self.assertIn("vortragsliste.xlsx", payload)
+        self.assertEqual("copy@example.com", results[0].cc_email)
 
     @patch("serienmailing.smtp_sender.send_email_messages")
     def test_passes_sent_copy_config_through(self, mock_send):

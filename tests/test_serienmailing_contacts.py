@@ -7,9 +7,15 @@ import pandas as pd
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from serienmailing.contacts import (
+    ContactColumnMapping,
+    apply_contact_editor_changes,
     contacts_from_excel,
     contacts_from_hubspot_raw,
     contacts_from_manual,
+    normalize_cc_addresses,
+    normalize_contact_editor_data,
+    recipient_validation_issues,
+    suggest_contact_column_mapping,
     validate_contacts,
     COLS,
 )
@@ -90,6 +96,214 @@ class ContactsFromExcelTests(unittest.TestCase):
         result, _ = contacts_from_excel(df)
         self.assertEqual(list(result.columns), COLS)
 
+    def test_example_workbook_headers_are_suggested_as_to_and_multiple_cc(self):
+        columns = [
+            "Sponsor",
+            "ASP 1 Vorname",
+            "ASP 1 E-Mail Adresse",
+            "ASP 2 E-Mail Adresse",
+            "ASP 3 E-Mail Adresse",
+            "ASP 4 E-Mail Adresse",
+        ]
+
+        mapping = suggest_contact_column_mapping(columns)
+
+        self.assertEqual("ASP 1 E-Mail Adresse", mapping.email)
+        self.assertEqual(
+            (
+                "ASP 2 E-Mail Adresse",
+                "ASP 3 E-Mail Adresse",
+                "ASP 4 E-Mail Adresse",
+            ),
+            mapping.cc_email,
+        )
+        self.assertEqual("ASP 1 Vorname", mapping.vorname)
+        self.assertEqual("Sponsor", mapping.firma)
+
+    def test_explicit_mapping_combines_multiple_cc_columns(self):
+        df = pd.DataFrame(
+            {
+                "Sponsor": ["ACME"],
+                "First": ["Anna"],
+                "Primary": ["anna@example.com"],
+                "Copy A": [" copy@example.com "],
+                "Copy B": ["second@example.com; COPY@example.com"],
+            }
+        )
+
+        result, warns = contacts_from_excel(
+            df,
+            mapping=ContactColumnMapping(
+                email="Primary",
+                cc_email=("Copy A", "Copy B"),
+                vorname="First",
+                firma="Sponsor",
+            ),
+        )
+
+        self.assertEqual([], warns)
+        self.assertEqual("copy@example.com, second@example.com", result.iloc[0]["cc_email"])
+
+    def test_to_address_is_removed_from_cc_case_insensitively(self):
+        df = pd.DataFrame(
+            {
+                "email": ["Anna@Example.com"],
+                "cc": ["anna@example.com; other@example.com"],
+            }
+        )
+
+        result, _ = contacts_from_excel(
+            df,
+            mapping=ContactColumnMapping(email="email", cc_email=("cc",)),
+        )
+
+        self.assertEqual("other@example.com", result.iloc[0]["cc_email"])
+
+    def test_empty_cc_cells_do_not_become_nan_text(self):
+        df = pd.DataFrame({"email": ["a@example.com"], "cc": [None]})
+
+        result, _ = contacts_from_excel(
+            df,
+            mapping=ContactColumnMapping(email="email", cc_email=("cc",)),
+        )
+
+        self.assertEqual("", result.iloc[0]["cc_email"])
+
+
+class NormalizeCcAddressesTests(unittest.TestCase):
+
+    def test_supports_commas_semicolons_and_newlines(self):
+        result = normalize_cc_addresses(
+            ["one@example.com; two@example.com", "three@example.com\nfour@example.com"]
+        )
+        self.assertEqual(
+            "one@example.com, two@example.com, three@example.com, four@example.com",
+            result,
+        )
+
+
+class NormalizeContactEditorDataTests(unittest.TestCase):
+
+    def test_keeps_incomplete_recipient_row_visible_for_correction(self):
+        result = normalize_contact_editor_data(
+            pd.DataFrame(
+                [
+                    {
+                        "vorname": "Anna",
+                        "firma": "ACME",
+                        "email": "",
+                        "cc_email": "copy@example.com",
+                    }
+                ]
+            )
+        )
+
+        self.assertEqual(1, len(result))
+        self.assertEqual("", result.iloc[0]["email"])
+
+    def test_drops_only_fully_empty_dynamic_rows(self):
+        result = normalize_contact_editor_data(
+            pd.DataFrame(
+                [
+                    {"vorname": "", "firma": "", "email": "", "cc_email": ""},
+                    {
+                        "vorname": "Anna",
+                        "firma": "ACME",
+                        "email": "anna@example.com",
+                        "cc_email": "",
+                    },
+                ]
+            )
+        )
+
+        self.assertEqual(1, len(result))
+        self.assertEqual(list(range(len(result))), list(result.index))
+        self.assertEqual(COLS, list(result.columns))
+
+    def test_normalizes_and_deduplicates_edited_cc_addresses(self):
+        result = normalize_contact_editor_data(
+            pd.DataFrame(
+                [
+                    {
+                        "vorname": "Anna",
+                        "firma": "ACME",
+                        "email": "anna@example.com",
+                        "cc_email": (
+                            "copy@example.com; COPY@example.com; anna@example.com; "
+                            "second@EXAMPLE.COM"
+                        ),
+                    }
+                ]
+            )
+        )
+
+        self.assertEqual(
+            "copy@example.com, second@example.com",
+            result.iloc[0]["cc_email"],
+        )
+
+    def test_applies_inline_recipient_correction(self):
+        source = pd.DataFrame(
+            [
+                {
+                    "vorname": "Umit",
+                    "firma": "Cribl",
+                    "email": "TBD",
+                    "cc_email": "",
+                }
+            ]
+        )
+
+        result = apply_contact_editor_changes(
+            source,
+            {
+                "edited_rows": {0: {"email": "umit@example.com"}},
+                "deleted_rows": [],
+                "added_rows": [],
+            },
+        )
+
+        self.assertEqual("umit@example.com", result.iloc[0]["email"])
+        self.assertEqual([], recipient_validation_issues(result))
+
+    def test_applies_row_deletion_and_resets_index(self):
+        source = pd.DataFrame(
+            [
+                {"vorname": "Umit", "firma": "Cribl", "email": "TBD", "cc_email": ""},
+                {
+                    "vorname": "Anna",
+                    "firma": "ACME",
+                    "email": "anna@example.com",
+                    "cc_email": "",
+                },
+            ]
+        )
+
+        result = apply_contact_editor_changes(
+            source,
+            {"edited_rows": {}, "deleted_rows": [0], "added_rows": []},
+        )
+
+        self.assertEqual(1, len(result))
+        self.assertEqual("anna@example.com", result.iloc[0]["email"])
+        self.assertEqual([0], list(result.index))
+
+    def test_applies_partial_added_row_without_hiding_it(self):
+        source = pd.DataFrame(columns=COLS)
+
+        result = apply_contact_editor_changes(
+            source,
+            {
+                "edited_rows": {},
+                "deleted_rows": [],
+                "added_rows": [{"vorname": "Neue Person"}],
+            },
+        )
+
+        self.assertEqual(1, len(result))
+        self.assertEqual("Neue Person", result.iloc[0]["vorname"])
+        self.assertEqual("(leer)", recipient_validation_issues(result)[0].value)
+
 
 class ContactsFromHubspotRawTests(unittest.TestCase):
 
@@ -121,6 +335,7 @@ class ContactsFromHubspotRawTests(unittest.TestCase):
         result = contacts_from_hubspot_raw(raw)
         self.assertEqual(result.iloc[0]["vorname"], "")
         self.assertEqual(result.iloc[0]["firma"], "")
+        self.assertEqual(result.iloc[0]["cc_email"], "")
 
     def test_empty_input(self):
         result = contacts_from_hubspot_raw([])
@@ -141,6 +356,21 @@ class ContactsFromManualTests(unittest.TestCase):
         result, warns = contacts_from_manual(df)
         self.assertEqual(len(result), 1)
         self.assertTrue(len(warns) > 0)
+
+    def test_cc_is_normalized_for_manual_contacts(self):
+        df = pd.DataFrame(
+            {
+                "vorname": ["A"],
+                "firma": ["F"],
+                "email": ["a@example.com"],
+                "cc_email": ["copy@example.com; second@example.com"],
+            }
+        )
+
+        result, warns = contacts_from_manual(df)
+
+        self.assertEqual([], warns)
+        self.assertEqual("copy@example.com, second@example.com", result.iloc[0]["cc_email"])
 
 
 class ValidateContactsTests(unittest.TestCase):
@@ -174,10 +404,59 @@ class ValidateContactsTests(unittest.TestCase):
         errors = validate_contacts(df)
         self.assertTrue(any("ungültig" in e.lower() for e in errors))
 
+    def test_empty_email_is_reported_with_contact_number(self):
+        df = pd.DataFrame(
+            [
+                {
+                    "vorname": "Anna",
+                    "firma": "ACME",
+                    "email": "",
+                    "cc_email": "",
+                }
+            ]
+        )
+
+        issues = recipient_validation_issues(df)
+
+        self.assertEqual(1, len(issues))
+        self.assertEqual(1, issues[0].contact_number)
+        self.assertEqual("An", issues[0].field)
+        self.assertEqual("(leer)", issues[0].value)
+
     def test_duplicate_case_insensitive(self):
         df = pd.DataFrame({"vorname": ["A", "B"], "firma": ["F", "G"], "email": ["Test@X.com", "test@x.com"]})
         errors = validate_contacts(df)
         self.assertTrue(any("doppelte" in e.lower() for e in errors))
+
+    def test_multiple_valid_cc_addresses_are_accepted(self):
+        df = pd.DataFrame(
+            {
+                "vorname": ["A"],
+                "firma": ["F"],
+                "email": ["a@example.com"],
+                "cc_email": ["copy@example.com, second@example.com"],
+            }
+        )
+        self.assertEqual([], validate_contacts(df))
+
+    def test_invalid_cc_address_is_reported_with_contact_number(self):
+        df = pd.DataFrame(
+            {
+                "vorname": ["A"],
+                "firma": ["F"],
+                "email": ["a@example.com"],
+                "cc_email": ["copy@example.com, not-an-email"],
+            }
+        )
+
+        errors = validate_contacts(df)
+        issues = recipient_validation_issues(df)
+
+        self.assertTrue(any("CC-Adresse" in error for error in errors))
+        self.assertEqual(1, len(issues))
+        self.assertEqual(1, issues[0].contact_number)
+        self.assertEqual("CC", issues[0].field)
+        self.assertEqual("not-an-email", issues[0].value)
 
 
 if __name__ == "__main__":

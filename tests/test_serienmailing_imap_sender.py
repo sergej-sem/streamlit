@@ -324,6 +324,7 @@ class CreateDraftsMockedTests(unittest.TestCase):
 
         mail = _make_mail(
             to_email="bob@example.com",
+            cc_email="copy@example.com",
             vorname="Bob",
             firma="Firma GmbH",
             subject="Betreff",
@@ -334,6 +335,7 @@ class CreateDraftsMockedTests(unittest.TestCase):
         self.assertEqual("Bob", r.vorname)
         self.assertEqual("Firma GmbH", r.firma)
         self.assertEqual("Betreff", r.subject)
+        self.assertEqual("copy@example.com", r.cc_email)
 
     @patch("serienmailing.imap_sender.imaplib.IMAP4_SSL")
     def test_logout_called_even_on_append_error(self, mock_imap4_ssl):

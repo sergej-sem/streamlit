@@ -6,7 +6,10 @@ sys.path.insert(0, os.path.normpath(os.path.join(os.path.dirname(__file__), ".."
 
 from shared.mail_signatures import SIGNATURE_SEVERIN_HTML
 from shared.mail_rich_text import (
+    _quill_parent_style_html,
     _quill_ui_bridge_html,
+    _resolve_editor_html,
+    _rich_text_widget_key,
     default_mail_body_html,
     default_mail_body_text,
     editor_html_is_meaningful,
@@ -55,6 +58,31 @@ class MailRichTextDefaultsTests(unittest.TestCase):
         self.assertIn("setTimeout", bridge_html)
         self.assertIn('data-mse-link-editing', bridge_html)
         self.assertNotIn('data-mse-link-state', bridge_html)
+
+    def test_quill_parent_style_keeps_component_visible(self):
+        style_html = _quill_parent_style_html()
+        self.assertIn('iframe[title="streamlit_quill.streamlit_quill"]', style_html)
+        self.assertIn("min-height", style_html)
+        self.assertIn("width: 100%", style_html)
+
+    def test_rich_text_widget_key_supports_explicit_instance(self):
+        self.assertEqual("mail__widget", _rich_text_widget_key("mail"))
+        self.assertEqual("mail__widget__3", _rich_text_widget_key("mail", 3))
+
+    def test_component_result_wins_editor_state_resolution(self):
+        self.assertEqual(
+            "<p>Komponente</p>",
+            _resolve_editor_html("<p>Alt</p>", "<p>Widget</p>", "<p>Komponente</p>"),
+        )
+
+    def test_widget_value_is_used_when_component_temporarily_returns_none(self):
+        self.assertEqual(
+            "<p>Widget neu</p>",
+            _resolve_editor_html("<p>Alt</p>", "<p>Widget neu</p>", None),
+        )
+
+    def test_empty_component_result_is_not_replaced_with_old_content(self):
+        self.assertEqual("", _resolve_editor_html("<p>Alt</p>", "<p>Widget</p>", ""))
 
 
 class MailRichTextSanitizationTests(unittest.TestCase):

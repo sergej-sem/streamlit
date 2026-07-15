@@ -128,6 +128,15 @@ _QUILL_UI_BRIDGE_STYLE = """
   content: 'Link eingeben:' !important;
 }
 """
+_QUILL_PARENT_STYLE_HTML = """
+<style>
+iframe[title="streamlit_quill.streamlit_quill"] {
+  display: block !important;
+  width: 100% !important;
+  min-height: 18rem !important;
+}
+</style>
+"""
 
 
 def _quill_ui_bridge_html() -> str:
@@ -303,6 +312,24 @@ def _render_quill_ui_bridge() -> None:
     components.html(_quill_ui_bridge_html(), height=0, width=0)
 
 
+def _quill_parent_style_html() -> str:
+    return _QUILL_PARENT_STYLE_HTML
+
+
+def _resolve_editor_html(
+    storage_value: str | None,
+    widget_value: object | None,
+    component_result: object | None,
+) -> str:
+    """Resolve editor state without falling back past a newer widget value."""
+
+    if component_result is not None:
+        return str(component_result)
+    if widget_value is not None:
+        return str(widget_value)
+    return str(storage_value or "")
+
+
 def default_mail_body_text() -> str:
     return _DEFAULT_BODY_TEXT
 
@@ -319,8 +346,9 @@ def quill_history_config() -> dict[str, int | bool]:
     return _QUILL_HISTORY
 
 
-def _rich_text_widget_key(key: str) -> str:
-    return f"{key}__widget"
+def _rich_text_widget_key(key: str, instance_id: str | int | None = None) -> str:
+    base_key = f"{key}__widget"
+    return base_key if instance_id is None else f"{base_key}__{instance_id}"
 
 
 def _rich_text_fallback_widget_key(key: str) -> str:
@@ -333,6 +361,7 @@ def render_mail_rich_text_editor(
     key: str,
     placeholder: str = "",
     value: str = "",
+    instance_id: str | int | None = None,
 ) -> str:
     storage_value = str(value or "")
     try:
@@ -356,9 +385,12 @@ def render_mail_rich_text_editor(
 
     import streamlit as st
 
-    widget_key = _rich_text_widget_key(key)
+    widget_key = _rich_text_widget_key(key, instance_id)
     if widget_key not in st.session_state:
         st.session_state[widget_key] = storage_value
+
+    st.markdown(f"**{label}**")
+    st.markdown(_quill_parent_style_html(), unsafe_allow_html=True)
 
     result = st_quill(
         value=st.session_state[widget_key],
@@ -370,7 +402,11 @@ def render_mail_rich_text_editor(
         key=widget_key,
     )
     _render_quill_ui_bridge()
-    html_result = storage_value if result is None else str(result)
+    html_result = _resolve_editor_html(
+        storage_value,
+        st.session_state.get(widget_key),
+        result,
+    )
     st.session_state[key] = html_result
     return html_result
 
