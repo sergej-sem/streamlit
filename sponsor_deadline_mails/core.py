@@ -32,6 +32,7 @@ from .planner import (
     is_talk_package,
 )
 from .rendering import build_html_body, build_subject, build_summary_dataframe
+from .workbook_statuses import build_supplemental_received
 
 
 DEFAULT_SHEET_NAME = "Deals"
@@ -137,6 +138,10 @@ def generate_deadline_mails(
         layout = resolve_workbook_layout(source_ws, strict=True)
         values_workbook = load_workbook(io.BytesIO(excel_bytes), data_only=True)
         ws = values_workbook[sheet_name]
+        supplemental_received = build_supplemental_received(
+            workbook, values_workbook, sheet_name=sheet_name, layout=layout,
+            event_start=start_date, event_end=end_date,
+        )
         mails: list[GeneratedMail] = []
         candidate_rows = 0
 
@@ -196,6 +201,7 @@ def generate_deadline_mails(
                 ws, sponsor, event_start=start_date, schedule=schedule, layout=layout,
                 onboarding_url=onboarding_url, venue=venue,
                 checkin_start=checkin_start, checkin_end=checkin_end, today=today,
+                supplemental_received=supplemental_received.get(row_number, frozenset()),
             )
             subject = build_subject(sponsor.language, sponsor.sponsor_name)
             html_body = build_html_body(sponsor, items, event_city, start_date, end_date, signature_html)

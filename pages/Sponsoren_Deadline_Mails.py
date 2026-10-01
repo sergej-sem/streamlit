@@ -45,6 +45,7 @@ from sponsor_deadline_mails import (
     list_workbook_sheets,
 )
 from sponsor_deadline_mails.events import DEFAULT_EVENT_VENUE, DEFAULT_ONBOARDING_URL
+from sponsor_deadline_mails.recipients import invalid_recipient_addresses
 from sponsor_deadline_mails.summary_state import (
     SUMMARY_SCHEMA_VERSION,
     build_summary_editor_df,
@@ -71,10 +72,10 @@ def _invalid_selected_mail_addresses(mails) -> list[str]:
     for mail in mails:
         to_email = (mail.to_email or "").strip()
         cc_email = (mail.cc_email or "").strip()
-        if not is_valid_email_address(to_email):
-            invalid.append(f"{mail.sponsor_name}: {to_email or '-'}")
-        if cc_email and not is_valid_email_address(cc_email):
-            invalid.append(f"{mail.sponsor_name} (Kopie): {cc_email}")
+        for address in invalid_recipient_addresses(to_email, required=True):
+            invalid.append(f"{mail.sponsor_name}: {address or '-'}")
+        for address in invalid_recipient_addresses(cc_email):
+            invalid.append(f"{mail.sponsor_name} (Kopie): {address}")
     return invalid
 
 
@@ -412,6 +413,9 @@ ensure_summary_state(st.session_state, result)
 summary_df = st.session_state["sdm_summary_df"]
 
 render_section_title("Zusammenfassung")
+st.caption(
+    "Die Statusprüfung berücksichtigt auch eindeutig zugeordnete Booklet- und Vortragsinformationen aus den Detailblättern."
+)
 _frag_summary()
 summary_df = st.session_state["sdm_summary_df"]
 selected_mail_numbers = get_selected_mail_numbers(summary_df)

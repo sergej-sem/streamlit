@@ -8,6 +8,7 @@ import pandas as pd
 import requests
 
 from .core import GeneratedMail
+from .recipients import recipient_mailboxes
 from shared.mail_errors import friendly_with_technical_hint
 
 
@@ -69,10 +70,13 @@ def _build_payload(mail: GeneratedMail) -> dict:
             "contentType": "HTML",
             "content": mail.html_body,
         },
-        "toRecipients": [_recipient(mail.to_email)],
+        "toRecipients": [
+            _recipient(address)
+            for address in recipient_mailboxes(mail.to_email, required=True)
+        ],
     }
     if mail.cc_email:
-        payload["ccRecipients"] = [_recipient(mail.cc_email)]
+        payload["ccRecipients"] = [_recipient(address) for address in recipient_mailboxes(mail.cc_email)]
     return payload
 
 

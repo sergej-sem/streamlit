@@ -97,6 +97,7 @@ def build_deadlines(
     checkin_start: str = DEFAULT_CHECKIN_START,
     checkin_end: str = DEFAULT_CHECKIN_END,
     today: date | None = None,
+    supplemental_received: frozenset[str] = frozenset(),
 ) -> list[DeadlineItem]:
     schedule = schedule or DeadlineSchedule.relative_to(event_start)
     schedule.validate(event_start)
@@ -119,6 +120,8 @@ def build_deadlines(
         )
 
     def task_status(key: str, *, incomplete: str = "red") -> str:
+        if key in supplemental_received:
+            return "green"
         col = layout.columns.get(key)
         if not col:
             # Without evidence, do not assert that an optional task is pending.

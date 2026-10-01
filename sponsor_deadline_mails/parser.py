@@ -8,6 +8,8 @@ from typing import Mapping
 
 from openpyxl import load_workbook
 
+from .recipients import normalize_recipient_cell
+
 
 NAME_COL = "B"
 PACKAGE_COL = "E"
@@ -69,7 +71,7 @@ HEADER_ALIASES = {
     "booklet": ("Booklet Informationen", "Bookletinformationen", "Bookletinformationen liegen vor", "Booklet information", "Booklet received"),
     "talk_info": ("Vortragsinformationen", "Vortragsinformationen erhalten", "Vortragsinformationen liegen vor", "Talk information", "Talk information received"),
     "onboarding": ("Onboarding", "Onboarding Meeting", "Onboarding gebucht", "Onboarding meeting booked"),
-    "target_accounts": ("Wunschteilnehmerliste erhalten", "Wunschteilnehmerliste", "Target Account Liste", "Target Accounts", "Target account list", "Target account list received"),
+    "target_accounts": ("Wunschteilnehmerliste erhalten", "Wunschteilnehmerliste", "Target Account Liste", "Target Account Liste erhalten", "Target Accounts", "Target account list", "Target account list received"),
     "led_wall": ("LED Wand Design", "LED-Wand-Design", "LED Wand Design erhalten", "LED wall design", "LED wall design received"),
     "posting_published": ("Posting gepostet", "Posting veröffentlicht", "LinkedIn Posting veröffentlicht", "Posting published", "LinkedIn post published"),
     "presentation": ("Präsentation erhalten", "Vortragspräsentation erhalten", "Vortragspräsentation", "Presentation received", "Presentation slides received"),
@@ -207,8 +209,8 @@ def build_sponsor_row(ws, row: int, layout: WorksheetLayout | None = None) -> Sp
 
     first_name = normalize_text(value("contact1_first"))
     last_name = normalize_text(value("contact1_last"))
-    to_email = normalize_text(value("contact1_email"))
-    cc_email = normalize_text(value("contact2_email"))
+    to_email = normalize_recipient_cell(value("contact1_email"))
+    cc_email = normalize_recipient_cell(value("contact2_email"))
 
     if not to_email and cc_email:
         to_email = cc_email
