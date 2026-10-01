@@ -91,7 +91,7 @@ def build_intro(
             f"mysecurityevent in {html.escape(event_city)}, taking place from {html.escape(start_text)} to {html.escape(end_text)}."
         )
         explainer = (
-            "Below you will find an overview of all documents and information that are still needed from you for the event preparation. "
+            "Below you will find an overview of the deadlines and the current status of your event preparation. "
             "Please make sure to observe the respective deadlines to ensure optimal preparation and a successful event."
         )
     else:
@@ -101,7 +101,7 @@ def build_intro(
             f"{html.escape(event_city)} vom {html.escape(start_text)} bis zum {html.escape(end_text)}."
         )
         explainer = (
-            "Du findest hier eine Übersicht aller Unterlagen, die ich in der Eventvorbereitung noch von Dir benötige. "
+            "Du findest hier eine Übersicht der Deadlines und des aktuellen Stands Deiner Eventvorbereitung. "
             "Bitte beachte unbedingt die entsprechenden Deadlines für eine optimale Vorbereitung und ein erfolgreiches Event."
         )
 
@@ -144,11 +144,18 @@ def render_deadline_rows(items: Iterable, language: str) -> str:
         due_date = item.due_date_en if language == "EN" else item.due_date_de
         text = item.text_en if language == "EN" else item.text_de
         status_label = STATUS_LABEL_EN[item.status] if language == "EN" else STATUS_LABEL_DE[item.status]
+        task_html = html.escape(text)
+        if getattr(item, "link_url", ""):
+            link_label = item.link_label_en if language == "EN" else item.link_label_de
+            task_html += (
+                f'<br><a href="{html.escape(item.link_url, quote=True)}">'
+                f'{html.escape(link_label or item.link_url)}</a>'
+            )
         rows.append(
             f"""
             <tr>
                 <td style="{HTML_BASE_STYLE} padding:10px 12px; border:1px solid #d9d9d9; vertical-align:top; white-space:nowrap;"><strong>{html.escape(due_date)}</strong></td>
-                <td style="{HTML_BASE_STYLE} padding:10px 12px; border:1px solid #d9d9d9; vertical-align:top;">{html.escape(text)}</td>
+                <td style="{HTML_BASE_STYLE} padding:10px 12px; border:1px solid #d9d9d9; vertical-align:top;">{task_html}</td>
                 <td style="{HTML_BASE_STYLE} padding:10px 12px; border:1px solid #d9d9d9; vertical-align:top;">
                     <span style="{HTML_BASE_STYLE} display:inline-block; padding:4px 10px; border-radius:999px; border:1px solid {COLOR_BORDER[item.status]}; background:{COLOR_BG[item.status]}; color:{COLOR_TEXT[item.status]}; font-weight:600;">
                         {html.escape(status_label)}

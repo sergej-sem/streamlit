@@ -109,6 +109,16 @@ class SponsorDeadlineMailRenderingTests(unittest.TestCase):
         self.assertIn("Send the LED wall design.", html_body)
         self.assertIn("Action required", html_body)
 
+    def test_onboarding_link_is_clickable_and_escaped(self) -> None:
+        item = DeadlineItem(
+            "ASAP", "ASAP", "Buche das Meeting.", "Book the meeting.", "red",
+            link_url="https://example.com/meeting?event=1&lang=en",
+            link_label_de="1:1 Onboarding Meeting", link_label_en="Book <onboarding>",
+        )
+        rows = render_deadline_rows([item], "EN")
+        self.assertIn('href="https://example.com/meeting?event=1&amp;lang=en"', rows)
+        self.assertIn("Book &lt;onboarding&gt;</a>", rows)
+
     def test_build_summary_dataframe_uses_expected_columns_and_values(self) -> None:
         result = GenerationResult(
             sheet_name="Deals",

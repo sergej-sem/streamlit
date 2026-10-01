@@ -22,6 +22,7 @@ from .smtp_sender import (
     build_smtp_send_log_dataframe,
     create_smtp_sends,
 )
+from .events import DeadlineSchedule
 
 __all__ = [
     "DEFAULT_EVENT_CITY",
@@ -29,6 +30,7 @@ __all__ = [
     "DEFAULT_EVENT_START",
     "DEFAULT_SHEET_NAME",
     "DeadlineItem",
+    "DeadlineSchedule",
     "GeneratedMail",
     "GenerationResult",
     "ImapDraftConfig",
