@@ -26,8 +26,8 @@ FRAME_COLORS = {
     "vipref.png": (225, 195, 110),
     "sponsor.png": (255, 255, 255),
     "beo.png": (182, 88, 163),
-    "team.png": (0, 59, 92),
-    "hostess.png": (142, 209, 240),
+    "team.png": (37, 45, 96),
+    "hostess.png": (160, 203, 238),
 }
 INNER_ARTWORK_BOX = (184, 184, 2297, 3313)
 

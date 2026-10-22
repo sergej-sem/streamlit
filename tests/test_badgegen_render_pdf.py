@@ -623,7 +623,7 @@ class QrColorForCategoryTests(unittest.TestCase):
 
     def test_team_gets_dark_blue(self):
         c = _qr_color_for_category("Team", colored=True)
-        self.assertEqual(c, rl_colors.HexColor("#003B5C"))
+        self.assertEqual(c, rl_colors.HexColor("#252D60"))
         self.assertEqual(c, _QR_COLOR_BY_CATEGORY["Team"])
 
     def test_hostess_gets_blue(self):
