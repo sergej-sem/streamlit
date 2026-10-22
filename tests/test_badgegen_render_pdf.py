@@ -621,15 +621,26 @@ class QrColorForCategoryTests(unittest.TestCase):
         self.assertNotEqual(c, _QR_COLOR_DEFAULT)
         self.assertEqual(c, _QR_COLOR_BY_CATEGORY["BEO"])
 
-    def test_team_gets_red(self):
+    def test_team_gets_dark_blue(self):
         c = _qr_color_for_category("Team", colored=True)
-        self.assertNotEqual(c, _QR_COLOR_DEFAULT)
+        self.assertEqual(c, rl_colors.HexColor("#003B5C"))
         self.assertEqual(c, _QR_COLOR_BY_CATEGORY["Team"])
 
     def test_hostess_gets_blue(self):
         c = _qr_color_for_category("Hostess", colored=True)
-        self.assertNotEqual(c, _QR_COLOR_DEFAULT)
+        self.assertEqual(c, rl_colors.HexColor("#216AB3"))
         self.assertEqual(c, _QR_COLOR_BY_CATEGORY["Hostess"])
+
+    def test_other_category_qr_colors_remain_unchanged(self):
+        expected = {
+            "TN": rl_colors.HexColor("#1a7a1a"),
+            "VIP/REF": rl_colors.HexColor("#B8860B"),
+            "Sponsor": rl_colors.black,
+            "BEO": rl_colors.HexColor("#660099"),
+        }
+        for category, color in expected.items():
+            with self.subTest(category=category):
+                self.assertEqual(color, _qr_color_for_category(category, colored=True))
 
     def test_beo_and_vip_different_colors(self):
         """BEO = violett, VIP/REF = gold — müssen unterschiedlich sein."""
